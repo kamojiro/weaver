@@ -1,0 +1,36 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Weaver: fmt",
+      "type": "shell",
+      "command": "just fmt",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Weaver: clippy",
+      "type": "shell",
+      "command": "just clippy",
+      "group": "build",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "Weaver: test",
+      "type": "shell",
+      "command": "just test",
+      "group": "test",
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "Weaver: check (fmt+clippy+test)",
+      "type": "shell",
+      "command": "just check",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$rustc"]
+    }
+  ]
+}

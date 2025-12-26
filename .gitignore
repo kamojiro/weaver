@@ -1,0 +1,14 @@
+# Rust build artifacts
+/target/
+**/target/
+
+# Rust tool backups
+**/*.rs.bk
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+
+# Optional: env files
+.env
+.env.*

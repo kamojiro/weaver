@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/weaver-core",
+  "crates/weaver-cli",
+]
