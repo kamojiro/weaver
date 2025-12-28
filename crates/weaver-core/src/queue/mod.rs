@@ -1,3 +1,15 @@
+//! Queue module: state management, retry logic, and in-memory implementation.
+
+mod memory;
+mod record;
+mod retry;
+mod state;
+
+pub use memory::InMemoryQueue;
+pub use record::TaskRecord;
+pub use retry::RetryPolicy;
+pub use state::TaskState;
+
 use async_trait::async_trait;
 
 use crate::domain::TaskEnvelope;
