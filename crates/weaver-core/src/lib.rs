@@ -1,14 +1,17 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! weaver-core
+//!
+//! Core building blocks for the Weaver runtime.
+//!
+//! This crate is intentionally split into small modules for learning:
+//! - domain: ids, states, envelopes, records, retry policy
+//! - queue: Queue trait + in-memory implementation
+//! - runtime: handler registry and execution helpers
+//! - observability: status views and state counts
+//! - error: crate-level error types
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod domain;
+pub mod error;
+pub mod worker;
+pub mod queue;
+pub mod runtime;
+pub mod observability;

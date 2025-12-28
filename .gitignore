@@ -12,3 +12,5 @@ Thumbs.db
 # Optional: env files
 .env
 .env.*
+
+dev/for_llm

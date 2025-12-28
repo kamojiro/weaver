@@ -4,7 +4,12 @@
     "dictionaryDefinitions": [],
     "dictionaries": [],
     "words": [
-        "clippy"
+        "clippy",
+        "Deque",
+        "newtype",
+        "repr",
+        "serde",
+        "thiserror"
     ],
     "ignoreWords": [],
     "import": []

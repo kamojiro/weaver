@@ -4,11 +4,8 @@
     "editor.defaultFormatter": "rust-lang.rust-analyzer",
     "editor.formatOnSave": true
   },
-  "rust-analyzer.checkOnSave.command": "clippy",
-  "rust-analyzer.checkOnSave.extraArgs": [
-    "--workspace",
-    "--all-targets",
-    "--all-features",
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.check.extraArgs": [
     "--",
     "-D",
     "warnings"
