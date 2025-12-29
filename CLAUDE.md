@@ -112,14 +112,28 @@ cargo clippy
 
 ### Current Implementation Status
 
-The codebase is in active development (v1). Based on git status and compilation errors:
+The codebase is in active development (v1). Current state as of 2025-12-28:
 
-- ✅ Domain model (IDs, Specs, Outcomes) is complete
-- ✅ Error types defined
-- ✅ Worker abstraction skeleton exists
-- ⚠️ Missing: `queue` module (referenced but not implemented)
-- ⚠️ Missing: `runtime` module (referenced but not implemented)
-- ⚠️ Main.rs references non-existent types: `ContentType`, `RetryPolicy`, `TaskEnvelope`, `TaskState`, `InMemoryQueue`, `Queue`, `HandlerRegistry`, `TaskHandler`, `execute_one`
+**✅ Implemented (Phase 1 Complete):**
+- Domain model (IDs, Specs, Outcomes, TaskEnvelope, TaskType)
+- Error types and WeaverError
+- Queue trait + InMemoryQueue implementation
+- TaskLease, TaskRecord, TaskState
+- RetryPolicy with backoff support
+- HandlerRegistry + Runtime for task execution
+- Worker/WorkerGroup for concurrent task processing
+- Basic task execution with automatic retry
+
+**📚 Learning Tasks (See `dev/learning/` for details):**
+- Job-level abstraction (submit_job, multiple tasks per job)
+- Attempt/Decision recording and audit trail
+- Task decomposition (breaking down complex tasks)
+- Dependency management and resolution
+- Budget constraints and stuck detection
+- Complete API (get_status, cancel_job, get_result)
+- Artifact storage and retrieval
+
+**Note**: The learning tasks in `dev/learning/` are intentionally left for educational purposes. See the Learning Tasks section below for Claude Code's role.
 
 ### Design Constraints
 
@@ -220,3 +234,27 @@ The `dev/docs/` directory contains critical development documentation:
 - **`dev/docs/adr/`**: Will contain Architecture Decision Records documenting significant architectural choices, trade-offs, and rationale
   - ADRs provide historical context for why specific design decisions were made
   - Consult existing ADRs before making changes that might conflict with documented decisions
+
+### Learning Tasks
+
+- **`dev/learning/`**: Learning task management and progress tracking
+  - **File Format**: Date-prefixed files (`YYYY_MM_DD.md`) - the newest date is always the current task list
+  - **Purpose**: Track learning progress, implementation tasks, and study notes
+  - **Content**: Each file contains:
+    - Task checklist (completed/incomplete)
+    - Learning notes and discoveries
+    - Implementation progress and next steps
+
+**IMPORTANT for Claude Code:**
+- Tasks in `dev/learning/` are **intentionally left for the learner to implement**
+- **DO NOT automatically implement** these tasks unless explicitly requested by the user
+- You SHOULD provide:
+  - Answers to questions about the tasks
+  - Implementation hints and guidance
+  - Code reviews and feedback
+  - Explanations of concepts
+- You SHOULD NOT:
+  - Automatically implement learning tasks without user request
+  - Complete tasks proactively "to be helpful"
+
+The learning tasks are derived from the requirements documents and represent the gap between current implementation and v1 goals.
