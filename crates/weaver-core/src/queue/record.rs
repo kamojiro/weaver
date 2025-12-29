@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use super::TaskState;
-use crate::domain::TaskEnvelope;
+use crate::domain::{JobId, TaskEnvelope};
 
 /// Metadata + envelope for a task in the queue.
 ///
@@ -15,6 +15,8 @@ use crate::domain::TaskEnvelope;
 pub struct TaskRecord {
     pub envelope: TaskEnvelope,
     pub state: TaskState,
+
+    pub job_id: Option<JobId>,
 
     /// Number of times this task has been executed (including current attempt if Running).
     pub attempts: u32,
@@ -39,6 +41,7 @@ impl TaskRecord {
         Self {
             envelope,
             state: TaskState::Queued,
+            job_id: None,
             attempts: 0,
             max_attempts,
             last_error: None,
@@ -46,6 +49,13 @@ impl TaskRecord {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    /// Create a new task record associated with a job.
+    pub fn new_with_job(envelope: TaskEnvelope, max_attempts: u32, job_id: JobId) -> Self {
+        let mut record = Self::new(envelope, max_attempts);
+        record.job_id = Some(job_id);
+        record
     }
 
     /// Mark as running (increment attempts).

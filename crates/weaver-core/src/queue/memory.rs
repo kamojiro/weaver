@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use tokio::sync::{Mutex, Notify};
 
 use super::{RetryPolicy, TaskRecord, TaskState};
-use crate::domain::{TaskEnvelope, TaskId};
+use crate::domain::{JobId, JobRecord, JobSpec, TaskEnvelope, TaskId};
 use crate::error::WeaverError;
 use crate::observability::QueueCounts;
 use crate::queue::{Queue, TaskLease};
@@ -37,7 +37,10 @@ impl Ord for ScheduledTask {
 
 /// In-memory queue state.
 struct InMemoryQueueState {
-    /// All task records (single source of truth).
+    /// All job records (single source of truth for jobs).
+    jobs: HashMap<JobId, JobRecord>,
+
+    /// All task records (single source of truth for tasks).
     records: HashMap<TaskId, TaskRecord>,
 
     /// Ready queue (TaskIds only).
@@ -46,8 +49,11 @@ struct InMemoryQueueState {
     /// Scheduled queue (retry backoff).
     scheduled: BinaryHeap<ScheduledTask>,
 
+    /// Next job ID to assign.
+    next_job_id: u64,
+
     /// Next task ID to assign.
-    next_id: u64,
+    next_task_id: u64,
 
     /// Retry policy.
     retry_policy: RetryPolicy,
@@ -56,18 +62,27 @@ struct InMemoryQueueState {
 impl InMemoryQueueState {
     fn new(retry_policy: RetryPolicy) -> Self {
         Self {
+            jobs: HashMap::new(),
             records: HashMap::new(),
             ready: VecDeque::new(),
             scheduled: BinaryHeap::new(),
-            next_id: 1,
+            next_job_id: 1,
+            next_task_id: 1,
             retry_policy,
         }
     }
 
+    /// Allocate a new JobId.
+    fn allocate_job_id(&mut self) -> JobId {
+        let id = JobId::new(self.next_job_id);
+        self.next_job_id += 1;
+        id
+    }
+
     /// Allocate a new TaskId.
-    fn allocate_id(&mut self) -> TaskId {
-        let id = TaskId::new(self.next_id);
-        self.next_id += 1;
+    fn allocate_task_id(&mut self) -> TaskId {
+        let id = TaskId::new(self.next_task_id);
+        self.next_task_id += 1;
         id
     }
 
@@ -80,11 +95,11 @@ impl InMemoryQueueState {
             }
 
             let entry = self.scheduled.pop().unwrap();
-            if let Some(record) = self.records.get_mut(&entry.task_id) {
-                if record.state == TaskState::RetryScheduled {
-                    record.requeue();
-                    self.ready.push_back(entry.task_id);
-                }
+            if let Some(record) = self.records.get_mut(&entry.task_id)
+                && record.state == TaskState::RetryScheduled
+            {
+                record.requeue();
+                self.ready.push_back(entry.task_id);
             }
         }
     }
@@ -102,6 +117,47 @@ impl InMemoryQueueState {
             }
         }
         counts
+    }
+
+    /// Create a new job.
+    fn create_job(&mut self, spec: JobSpec) -> JobId {
+        let id = self.allocate_job_id();
+        let job_record = JobRecord::new(id, spec);
+        self.jobs.insert(id, job_record);
+        id
+    }
+
+    /// Get a job by ID.
+    fn get_job(&self, job_id: JobId) -> Option<&JobRecord> {
+        self.jobs.get(&job_id)
+    }
+
+    /// Get a mutable reference to a job by ID.
+    fn get_job_mut(&mut self, job_id: JobId) -> Option<&mut JobRecord> {
+        self.jobs.get_mut(&job_id)
+    }
+
+    /// Create a job with its tasks.
+    fn create_job_with_tasks(&mut self, spec: JobSpec) -> JobId {
+        let job_id = self.create_job(spec.clone());
+        let max_attempts = spec.budget.max_attempts_per_task;
+        for task_spec in &spec.tasks {
+            let task_id = self.allocate_task_id();
+            let task_type = task_spec
+                .title
+                .clone()
+                .unwrap_or_else(|| "generic".to_string());
+            let payload = serde_json::to_value(task_spec).unwrap_or(serde_json::json!({}));
+            let envelope =
+                TaskEnvelope::new(task_id, crate::domain::TaskType::new(task_type), payload);
+            let task_record = TaskRecord::new_with_job(envelope, max_attempts, job_id);
+            self.records.insert(task_id, task_record);
+            self.ready.push_back(task_id);
+            self.get_job_mut(job_id)
+                .expect("job must exist after crate_job.")
+                .add_task(task_id);
+        }
+        job_id
     }
 }
 
@@ -124,7 +180,7 @@ impl InMemoryQueue {
 impl Queue for InMemoryQueue {
     async fn enqueue(&self, envelope: TaskEnvelope) -> Result<(), WeaverError> {
         let mut state = self.state.lock().await;
-        let task_id = state.allocate_id();
+        let task_id = state.allocate_task_id();
 
         // Create new record (default: Queued, max_attempts from budget or default)
         let max_attempts = 5; // TODO: Get from envelope's task spec budget
@@ -146,18 +202,18 @@ impl Queue for InMemoryQueue {
                 let mut state = self.state.lock().await;
                 state.promote_scheduled_tasks();
 
-                if let Some(task_id) = state.ready.pop_front() {
-                    if let Some(record) = state.records.get_mut(&task_id) {
-                        record.start_attempt();
-                        let lease = InMemoryLease {
-                            task_id,
-                            envelope: record.envelope.clone(),
-                            queue: Arc::clone(&self.state),
-                            retry_policy: state.retry_policy.clone(),
-                            notify: Arc::clone(&self.notify),
-                        };
-                        return Some(Box::new(lease));
-                    }
+                if let Some(task_id) = state.ready.pop_front()
+                    && let Some(record) = state.records.get_mut(&task_id)
+                {
+                    record.start_attempt();
+                    let lease = InMemoryLease {
+                        task_id,
+                        envelope: record.envelope.clone(),
+                        queue: Arc::clone(&self.state),
+                        retry_policy: state.retry_policy.clone(),
+                        notify: Arc::clone(&self.notify),
+                    };
+                    return Some(Box::new(lease));
                 }
 
                 // No ready tasks - check if we have scheduled tasks
@@ -179,6 +235,17 @@ impl Queue for InMemoryQueue {
     async fn counts_by_state(&self) -> Result<QueueCounts, WeaverError> {
         let state = self.state.lock().await;
         Ok(state.counts_by_state())
+    }
+}
+
+impl InMemoryQueue {
+    pub async fn submit_job(&self, spec: JobSpec) -> Result<JobId, WeaverError> {
+        let job_id = {
+            let mut state = self.state.lock().await;
+            state.create_job_with_tasks(spec)
+        };
+        self.notify.notify_one();
+        Ok(job_id)
     }
 }
 
@@ -247,7 +314,11 @@ mod tests {
     #[tokio::test]
     async fn enqueue_and_counts() {
         let queue = InMemoryQueue::new(RetryPolicy::default_v1());
-        let env = TaskEnvelope::new(TaskId::new(999), TaskType::new("test"), serde_json::json!({}));
+        let env = TaskEnvelope::new(
+            TaskId::new(999),
+            TaskType::new("test"),
+            serde_json::json!({}),
+        );
 
         queue.enqueue(env).await.unwrap();
 
@@ -259,14 +330,18 @@ mod tests {
     #[tokio::test]
     async fn lease_transitions_to_running() {
         let queue = InMemoryQueue::new(RetryPolicy::default_v1());
-        let env = TaskEnvelope::new(TaskId::new(999), TaskType::new("test"), serde_json::json!({}));
+        let env = TaskEnvelope::new(
+            TaskId::new(999),
+            TaskType::new("test"),
+            serde_json::json!({}),
+        );
 
         queue.enqueue(env).await.unwrap();
 
-        let lease = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            queue.lease()
-        ).await.unwrap().unwrap();
+        let lease = tokio::time::timeout(std::time::Duration::from_millis(100), queue.lease())
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(lease.envelope().task_type().as_str(), "test");
 
@@ -278,7 +353,11 @@ mod tests {
     #[tokio::test]
     async fn ack_marks_succeeded() {
         let queue = InMemoryQueue::new(RetryPolicy::default_v1());
-        let env = TaskEnvelope::new(TaskId::new(999), TaskType::new("test"), serde_json::json!({}));
+        let env = TaskEnvelope::new(
+            TaskId::new(999),
+            TaskType::new("test"),
+            serde_json::json!({}),
+        );
 
         queue.enqueue(env).await.unwrap();
         let lease = queue.lease().await.unwrap();

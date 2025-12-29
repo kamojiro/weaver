@@ -15,6 +15,15 @@ pub struct JobSpec {
     pub budget: Budget,
 }
 
+impl JobSpec {
+    pub fn new(tasks: Vec<TaskSpec>) -> Self{
+        Self {
+            tasks,
+            budget: Budget::default(),
+        }
+    }
+}
+
 /// A trackable unit inside a job.
 /// Tasks may be added during execution (decomposition, alternatives, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize)]

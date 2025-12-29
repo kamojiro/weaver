@@ -15,6 +15,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **v1 implementation** focused on single-process execution with in-memory state. The architecture is intentionally designed to support future extensions (persistence, distributed workers, DAG optimization).
 
+### Learning Mode
+
+**IMPORTANT**: This project is being developed as a Rust learning exercise.
+
+**For Claude Code:**
+- The user is actively learning Rust, async patterns, and functional programming
+- **Do NOT automatically implement features** unless explicitly requested
+- **Instead, provide:**
+  - Implementation hints and guidance
+  - TODO(human) markers in code for learning opportunities
+  - "Learn by Doing" format requests for key implementation tasks
+  - Code reviews and explanations after user implements features
+- **Learning opportunities** include:
+  - Pattern matching and applying existing patterns to new problems
+  - Understanding ownership, lifetimes, and async patterns through practice
+  - Making design decisions with trade-off analysis
+
+See `dev/learning/` for current learning tasks and progress.
+
 ## Architecture
 
 ### Crate Structure
