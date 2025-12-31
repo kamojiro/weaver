@@ -1,69 +1,69 @@
-# Weaver Architecture Documentation
+# Weaver アーキテクチャドキュメント
 
-**Version**: v1 (2025-12-30)
-**Status**: Active Development
+**バージョン**: v1 (2025-12-30)
+**ステータス**: 開発中
 
-## Table of Contents
+## 目次
 
-- [Overview](#overview)
-- [Layer Architecture](#layer-architecture)
-- [Type System Overview](#type-system-overview)
-- [Data Flow](#data-flow)
-- [State Transitions](#state-transitions)
-- [Core Structures Reference](#core-structures-reference)
-- [Usage Examples](#usage-examples)
-- [Design Decisions](#design-decisions)
-
----
-
-## Overview
-
-Weaver is a task execution engine built with the following principles:
-
-- **Strongly-typed IDs**: Prevent mixing different identifier types (JobId, TaskId, AttemptId)
-- **Algebraic data types**: Use enums with exhaustive matching to prevent logic gaps
-- **Functional decision logic**: Deciders are pure functions (state + observation → next action)
-- **Isolated side effects**: Execution (Runners) contains side effects; everything else is pure
-- **Full observability**: Every attempt, decision, and outcome is recorded
-
-### Key Characteristics (v1)
-
-- **Single-process**: No distributed coordination
-- **In-memory state**: Persistence will be pluggable later
-- **Cancellable**: Supports `get_status()` and `cancel_job()` operations
-- **Budget-aware**: Respects max attempts, deadlines, and stuck detection
+- [概要](#概要)
+- [レイヤーアーキテクチャ](#レイヤーアーキテクチャ)
+- [型システム概要](#型システム概要)
+- [データフロー](#データフロー)
+- [状態遷移](#状態遷移)
+- [コア構造リファレンス](#コア構造リファレンス)
+- [使用例](#使用例)
+- [設計決定](#設計決定)
 
 ---
 
-## Layer Architecture
+## 概要
+
+Weaver は以下の原則で構築されたタスク実行エンジンです：
+
+- **強い型付けされたID**: 異なる識別子タイプ（JobId、TaskId、AttemptId）の混同を防ぐ
+- **代数的データ型**: 網羅的なマッチングを持つenumを使用してロジックの穴を防ぐ
+- **関数型の決定ロジック**: Deciderは純粋関数（状態 + 観測 → 次のアクション）
+- **副作用の分離**: 実行（Runners）に副作用を含め、その他はすべて純粋
+- **完全な可観測性**: すべての試行、決定、結果が記録される
+
+### 主要な特徴（v1）
+
+- **シングルプロセス**: 分散協調なし
+- **インメモリ状態**: 永続化は後でプラグイン可能
+- **キャンセル可能**: `get_status()` と `cancel_job()` 操作をサポート
+- **予算認識**: 最大試行回数、デッドライン、スタック検出を尊重
+
+---
+
+## レイヤーアーキテクチャ
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    CLI / Application                    │
+│                  CLI / アプリケーション                  │
 │                   (weaver-cli crate)                    │
 └─────────────────────────────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────┐
 │                   Runtime / Worker                      │
-│         (Orchestration & Concurrent Execution)          │
-│   - Runtime: HandlerRegistry + job submission           │
-│   - Worker: Lease tasks, execute, report outcomes       │
+│            (オーケストレーション & 並行実行)              │
+│   - Runtime: HandlerRegistry + ジョブ投入               │
+│   - Worker: タスクリース、実行、結果報告                 │
 └─────────────────────────────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────┐
-│                      Queue Layer                        │
-│             (State Management & Scheduling)             │
-│   - InMemoryQueue: Task storage & lease                │
-│   - TaskRecord: State machine & transitions             │
-│   - RetryPolicy: Backoff calculation                    │
+│                      キューレイヤー                       │
+│               (状態管理 & スケジューリング)               │
+│   - InMemoryQueue: タスク保存 & リース                   │
+│   - TaskRecord: 状態マシン & 遷移                        │
+│   - RetryPolicy: バックオフ計算                          │
 └─────────────────────────────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────┐
-│                     Domain Model                        │
-│          (Pure types, no infrastructure)                │
+│                     ドメインモデル                        │
+│            (純粋な型、インフラなし)                       │
 │   - IDs: JobId, TaskId, AttemptId                       │
 │   - Specs: JobSpec, TaskSpec, Budget                    │
 │   - Outcomes: Outcome, OutcomeKind, Artifact            │
@@ -72,59 +72,59 @@ Weaver is a task execution engine built with the following principles:
 └─────────────────────────────────────────────────────────┘
 ```
 
-### Layer Responsibilities
+### レイヤーの責務
 
-| Layer | Responsibility | Key Abstractions |
-|-------|---------------|------------------|
-| **Domain** | Pure types, business logic, no infrastructure | IDs, Specs, Outcomes, Records |
-| **Queue** | State management, scheduling, task lifecycle | TaskRecord, TaskState, InMemoryQueue |
-| **Runtime** | Orchestration, handler dispatch, concurrency | Runtime, Worker, HandlerRegistry |
-| **CLI/App** | User interface, example implementations | Commands, example handlers |
+| レイヤー | 責務 | 主要な抽象化 |
+|-------|------|-------------|
+| **Domain** | 純粋な型、ビジネスロジック、インフラなし | IDs, Specs, Outcomes, Records |
+| **Queue** | 状態管理、スケジューリング、タスクライフサイクル | TaskRecord, TaskState, InMemoryQueue |
+| **Runtime** | オーケストレーション、ハンドラディスパッチ、並行性 | Runtime, Worker, HandlerRegistry |
+| **CLI/App** | ユーザーインターフェース、実装例 | Commands, example handlers |
 
 ---
 
-## Type System Overview
+## 型システム概要
 
-### Core Type Categories
+### コアとなる型のカテゴリー
 
 ```mermaid
 graph TB
-    subgraph "1. Identifiers"
+    subgraph "1. 識別子"
         JobId["JobId(u64)"]
         TaskId["TaskId(u64)"]
         AttemptId["AttemptId(u64)"]
     end
 
-    subgraph "2. Input Specifications"
+    subgraph "2. 入力仕様"
         JobSpec["JobSpec<br/>tasks: Vec&lt;TaskSpec&gt;<br/>budget: Budget"]
         TaskSpec["TaskSpec<br/>title, intent, goal<br/>constraints, hints"]
         Budget["Budget<br/>max_attempts_per_task<br/>deadline_ms"]
     end
 
-    subgraph "3. Execution Data"
+    subgraph "3. 実行データ"
         TaskEnvelope["TaskEnvelope<br/>task_id: TaskId<br/>task_type: TaskType<br/>payload: Value"]
         TaskType["TaskType(String)"]
     end
 
-    subgraph "4. Outcomes"
+    subgraph "4. 結果"
         Outcome["Outcome<br/>kind: OutcomeKind<br/>artifacts: Vec&lt;Artifact&gt;<br/>reason, retry_hint"]
         OutcomeKind["OutcomeKind<br/>SUCCESS | FAILURE | BLOCKED"]
         Artifact["Artifact<br/>Stdout | Stderr<br/>FilePath | Url | Json"]
     end
 
-    subgraph "5. State Records"
+    subgraph "5. 状態レコード"
         TaskRecord["TaskRecord<br/>envelope, state<br/>attempts, max_attempts"]
         TaskState["TaskState<br/>Queued | Running<br/>Succeeded | RetryScheduled<br/>Dead"]
         JobRecord["JobRecord<br/>job_id, spec<br/>state, task_ids"]
         JobState["JobState<br/>Running | Completed<br/>Failed | Cancelled"]
     end
 
-    subgraph "6. History Records"
+    subgraph "6. 履歴レコード"
         AttemptRecord["AttemptRecord<br/>action, observation<br/>outcome, timestamps"]
         DecisionRecord["DecisionRecord<br/>trigger, policy<br/>decision, context"]
     end
 
-    subgraph "7. Decision Logic"
+    subgraph "7. 決定ロジック"
         Decision["Decision<br/>Retry | MarkDead"]
         Decider["Decider trait<br/>decide(task, outcome)"]
     end
@@ -152,28 +152,28 @@ graph TB
 
 ---
 
-## Data Flow
+## データフロー
 
-### Job Submission to Completion
+### ジョブ投入から完了まで
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant Runtime
-    participant Queue
-    participant Worker
-    participant Handler
-    participant Decider
+    participant User as ユーザー
+    participant Runtime as Runtime
+    participant Queue as Queue
+    participant Worker as Worker
+    participant Handler as Handler
+    participant Decider as Decider
 
     User->>Runtime: submit_job(JobSpec)
-    Runtime->>Queue: create JobRecord
-    loop for each TaskSpec
+    Runtime->>Queue: JobRecordを作成
+    loop 各TaskSpecごと
         Runtime->>Queue: enqueue(TaskEnvelope)
-        Queue->>Queue: create TaskRecord(Queued)
+        Queue->>Queue: TaskRecord(Queued)を作成
     end
     Runtime-->>User: JobId
 
-    loop Until job complete
+    loop ジョブ完了まで
         Worker->>Queue: lease_task()
         Queue->>Queue: TaskRecord.start_attempt()
         Queue-->>Worker: TaskEnvelope
@@ -183,75 +183,75 @@ sequenceDiagram
 
         Worker->>Queue: complete_task(outcome)
 
-        alt Outcome is SUCCESS
+        alt OutcomeがSUCCESS
             Queue->>Queue: mark_succeeded()
-        else Outcome is FAILURE
+        else OutcomeがFAILURE
             Queue->>Decider: decide(task, outcome)
             Decider-->>Queue: Decision
-            alt Decision is Retry
+            alt DecisionがRetry
                 Queue->>Queue: schedule_retry(delay)
-            else Decision is MarkDead
+            else DecisionがMarkDead
                 Queue->>Queue: mark_dead()
             end
-        else Outcome is BLOCKED
+        else OutcomeがBLOCKED
             Queue->>Decider: decide(task, outcome)
-            Note over Queue,Decider: Future: may decompose<br/>or add dependencies
+            Note over Queue,Decider: 将来: タスク分解や<br/>依存関係追加の可能性
         end
 
-        Queue->>Queue: update JobState
+        Queue->>Queue: JobStateを更新
     end
 
     User->>Runtime: get_status(JobId)
-    Runtime->>Queue: query JobRecord
+    Runtime->>Queue: JobRecordをクエリ
     Queue-->>Runtime: JobStatus
     Runtime-->>User: JobStatus
 ```
 
-### Task Lifecycle
+### タスクライフサイクル
 
 ```mermaid
 flowchart TD
-    Start([JobSpec submitted]) --> CreateJob[Create JobRecord]
-    CreateJob --> CreateTasks[Create TaskRecords<br/>from TaskSpecs]
-    CreateTasks --> Enqueue[Enqueue to ready queue]
+    Start([JobSpecが投入される]) --> CreateJob[JobRecordを作成]
+    CreateJob --> CreateTasks[TaskSpecsから<br/>TaskRecordsを作成]
+    CreateTasks --> Enqueue[readyキューにエンキュー]
 
-    Enqueue --> Lease{Worker leases task}
-    Lease --> Execute[Execute handler]
-    Execute --> Outcome{Outcome kind?}
+    Enqueue --> Lease{Workerがタスクをリース}
+    Lease --> Execute[ハンドラを実行]
+    Execute --> Outcome{Outcomeの種類?}
 
-    Outcome -->|SUCCESS| MarkSuccess[Mark succeeded]
+    Outcome -->|SUCCESS| MarkSuccess[成功としてマーク]
     Outcome -->|FAILURE| Decide[Decider.decide]
     Outcome -->|BLOCKED| Decide
 
-    Decide --> Decision{Decision?}
-    Decision -->|Retry| ScheduleRetry[Schedule retry<br/>with backoff]
-    Decision -->|MarkDead| MarkDead[Mark dead]
+    Decide --> Decision{決定内容?}
+    Decision -->|Retry| ScheduleRetry[バックオフ付きで<br/>リトライをスケジュール]
+    Decision -->|MarkDead| MarkDead[Deadとしてマーク]
 
-    ScheduleRetry --> RetryQueue[Move to scheduled queue]
-    RetryQueue --> WaitBackoff[Wait for delay]
-    WaitBackoff --> Requeue[Requeue to ready]
+    ScheduleRetry --> RetryQueue[scheduledキューに移動]
+    RetryQueue --> WaitBackoff[遅延を待機]
+    WaitBackoff --> Requeue[readyに再エンキュー]
     Requeue --> Lease
 
-    MarkSuccess --> UpdateJob[Update JobRecord state]
+    MarkSuccess --> UpdateJob[JobRecordの状態を更新]
     MarkDead --> UpdateJob
-    UpdateJob --> CheckComplete{All tasks done?}
-    CheckComplete -->|Yes| JobComplete[Job complete]
+    UpdateJob --> CheckComplete{全タスク完了?}
+    CheckComplete -->|Yes| JobComplete[ジョブ完了]
     CheckComplete -->|No| Lease
 
-    JobComplete --> End([Return JobResult])
+    JobComplete --> End([JobResultを返す])
 ```
 
 ---
 
-## State Transitions
+## 状態遷移
 
-### TaskState Transitions
+### TaskState の遷移
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Queued: Task created
+    [*] --> Queued: タスクが作成される
 
-    Queued --> Running: Worker leases task
+    Queued --> Running: Workerがタスクをリース
 
     Running --> Succeeded: Outcome=SUCCESS
     Running --> RetryScheduled: Outcome=FAILURE<br/>Decision=Retry
@@ -259,70 +259,70 @@ stateDiagram-v2
     Running --> RetryScheduled: Outcome=BLOCKED<br/>Decision=Retry
     Running --> Dead: Outcome=BLOCKED<br/>Decision=MarkDead
 
-    RetryScheduled --> Queued: Backoff delay elapsed
+    RetryScheduled --> Queued: バックオフ遅延が経過
 
     Succeeded --> [*]
     Dead --> [*]
 
     note right of Succeeded
-        Terminal state
-        No further transitions
+        終了状態
+        これ以上の遷移なし
     end note
 
     note right of Dead
-        Terminal state
-        Max attempts exceeded
+        終了状態
+        最大試行回数を超過
     end note
 ```
 
-### JobState Transitions
+### JobState の遷移
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Running: Job created
+    [*] --> Running: ジョブが作成される
 
-    Running --> Completed: All tasks succeeded
-    Running --> Failed: No runnable tasks<br/>At least one dead
-    Running --> Cancelled: User cancels job
-    Running --> Running: Task state changes<br/>(not terminal)
+    Running --> Completed: 全タスクが成功
+    Running --> Failed: 実行可能なタスクなし<br/>少なくとも1つがDead
+    Running --> Cancelled: ユーザーがジョブをキャンセル
+    Running --> Running: タスクの状態変化<br/>(終了状態でない)
 
     Completed --> [*]
     Failed --> [*]
     Cancelled --> [*]
 
     note right of Completed
-        All task_ids have
+        全てのtask_idsが
         TaskState=Succeeded
     end note
 
     note right of Failed
-        No Queued/Running/RetryScheduled
-        At least one Dead
+        Queued/Running/RetryScheduledなし
+        少なくとも1つがDead
     end note
 ```
 
 ---
 
-## Core Structures Reference
+## コア構造リファレンス
 
-### 1. Identifiers (`domain/ids.rs`)
+### 1. 識別子 (`domain/ids.rs`)
 
-| Type | Purpose | Representation |
+| 型 | 目的 | 表現 |
 |------|---------|----------------|
-| `JobId` | Unit of submission/cancellation/status | Newtype around `u64` |
-| `TaskId` | Minimum trackable unit within a Job | Newtype around `u64` |
-| `AttemptId` | One execution try of a Task | Newtype around `u64` |
+| `JobId` | 投入/キャンセル/ステータスの単位 | `u64` のNewtypeラッパー |
+| `TaskId` | Job内の最小追跡可能単位 | `u64` のNewtypeラッパー |
+| `AttemptId` | Taskの1回の実行試行 | `u64` のNewtypeラッパー |
 
-**Design rationale**: Newtype pattern prevents mixing different ID types at compile time (see ADR-0001).
+**設計根拠**: Newtypeパターンにより、コンパイル時に異なるID型の混同を防ぐ（ADR-0001参照）。
 
 ```rust
-// Example: Type safety in action
+// 例: 型安全性の実践
 let job_id = JobId::new(1);
 let task_id = TaskId::new(1);
-// let _: JobId = task_id; // <- Compile error! Cannot mix types
+// let _: JobId = task_id; // <- コンパイルエラー！型を混在できない
 ```
 
-### 2. Input Specifications (`domain/spec.rs`)
+### 2. 入力仕様 (`domain/spec.rs`)
 
 #### JobSpec
 
@@ -333,9 +333,9 @@ pub struct JobSpec {
 }
 ```
 
-- **Purpose**: Unit of submission to the system
-- **Lifecycle**: Created by user → Runtime creates JobRecord
-- **Flexibility**: Uses `Vec<TaskSpec>` to support multiple tasks per job
+- **目的**: システムへの投入単位
+- **ライフサイクル**: ユーザーが作成 → RuntimeがJobRecordを作成
+- **柔軟性**: `Vec<TaskSpec>` を使用してジョブごとに複数タスクをサポート
 
 #### TaskSpec
 
@@ -350,9 +350,9 @@ pub struct TaskSpec {
 }
 ```
 
-- **Purpose**: Declarative description of what needs to be done
-- **Flexibility**: Uses `serde_json::Value` for domain-specific fields (v1 design)
-- **Evolution**: Can add new fields without breaking existing code
+- **目的**: 実行すべき内容の宣言的な記述
+- **柔軟性**: ドメイン固有フィールドに `serde_json::Value` を使用（v1設計）
+- **進化**: 既存コードを壊さずに新しいフィールドを追加可能
 
 #### Budget
 
@@ -365,11 +365,11 @@ pub struct Budget {
 }
 ```
 
-- **Purpose**: Execution constraints to prevent infinite loops
-- **Defaults**: 5 attempts per task, 50 no-progress steps
-- **v1 scope**: Basic attempt limiting; future may add cost budgets
+- **目的**: 無限ループを防ぐための実行制約
+- **デフォルト**: タスクあたり5回の試行、50回の進捗なしステップ
+- **v1スコープ**: 基本的な試行制限、将来的にはコスト予算を追加予定
 
-### 3. Execution Data (`domain/task.rs`)
+### 3. 実行データ (`domain/task.rs`)
 
 #### TaskEnvelope
 
@@ -381,9 +381,9 @@ pub struct TaskEnvelope {
 }
 ```
 
-- **Purpose**: "Delivery package" for handlers (ID + type + data)
-- **Pattern**: Handlers receive this from workers
-- **Design**: Immutable; passed by Arc to avoid locks during execution (see ADR-0003)
+- **目的**: ハンドラへの「配送パッケージ」（ID + タイプ + データ）
+- **パターン**: ハンドラはWorkerからこれを受け取る
+- **設計**: 不変、実行中のロックを避けるためArcで渡される（ADR-0003参照）
 
 #### TaskType
 
@@ -391,10 +391,10 @@ pub struct TaskEnvelope {
 pub struct TaskType(String);
 ```
 
-- **Purpose**: Handler dispatch key (e.g., "http_request", "shell_command")
-- **Pattern**: Runtime uses this to lookup handlers in HandlerRegistry
+- **目的**: ハンドラディスパッチキー（例: "http_request", "shell_command"）
+- **パターン**: RuntimeはこれをHandlerRegistryでハンドラを検索するために使用
 
-### 4. Outcomes (`domain/outcome.rs`)
+### 4. 結果 (`domain/outcome.rs`)
 
 #### Outcome
 
@@ -408,12 +408,12 @@ pub struct Outcome {
 }
 ```
 
-- **Purpose**: Unified result format for attempts
-- **Three kinds**:
-  - `SUCCESS`: Forward progress (final or intermediate)
-  - `FAILURE`: Recoverable failure (retry possible)
-  - `BLOCKED`: Cannot proceed without intervention
-- **Observability**: Artifacts capture stdout, stderr, files, URLs, JSON
+- **目的**: 試行の統一された結果フォーマット
+- **3種類**:
+  - `SUCCESS`: 進展あり（最終または中間）
+  - `FAILURE`: 回復可能な失敗（リトライ可能）
+  - `BLOCKED`: 介入なしでは進めない
+- **可観測性**: Artifactsはstdout、stderr、ファイル、URL、JSONをキャプチャ
 
 #### Artifact
 
@@ -427,10 +427,10 @@ pub enum Artifact {
 }
 ```
 
-- **Purpose**: References to execution outputs/observations
-- **Serialization**: Tagged enum (`{"kind":"Stdout","value":"..."}`)
+- **目的**: 実行出力/観測への参照
+- **シリアライゼーション**: タグ付きenum（`{"kind":"Stdout","value":"..."}`）
 
-### 5. State Records (`queue/record.rs`, `domain/job.rs`)
+### 5. 状態レコード (`queue/record.rs`, `domain/job.rs`)
 
 #### TaskRecord
 
@@ -448,25 +448,25 @@ pub struct TaskRecord {
 }
 ```
 
-- **Purpose**: Single source of truth for task state (see ADR-0002)
-- **Pattern**: All state transitions happen via methods (`start_attempt`, `mark_succeeded`, etc.)
-- **Storage**: Queue holds `HashMap<TaskId, TaskRecord>`; ready/scheduled queues hold `TaskId` only (see ADR-0001)
+- **目的**: タスク状態の唯一の信頼できる情報源（ADR-0002参照）
+- **パターン**: すべての状態遷移はメソッド経由で発生（`start_attempt`、`mark_succeeded` など）
+- **ストレージ**: Queueは `HashMap<TaskId, TaskRecord>` を保持、ready/scheduledキューは `TaskId` のみを保持（ADR-0001参照）
 
 #### TaskState
 
 ```rust
 pub enum TaskState {
-    Queued,           // Ready to run
-    Running,          // Being executed
-    Succeeded,        // Terminal: success
-    RetryScheduled,   // Waiting for backoff
-    Dead,             // Terminal: max attempts exceeded
+    Queued,           // 実行準備完了
+    Running,          // 実行中
+    Succeeded,        // 終了: 成功
+    RetryScheduled,   // バックオフ待機中
+    Dead,             // 終了: 最大試行回数超過
 }
 ```
 
-- **Purpose**: Finite state machine for task lifecycle
-- **Terminal states**: `Succeeded`, `Dead` (no further transitions)
-- **Runnable states**: `Queued` (eligible for lease)
+- **目的**: タスクライフサイクルの有限状態マシン
+- **終了状態**: `Succeeded`、`Dead`（これ以上の遷移なし）
+- **実行可能状態**: `Queued`（リース対象）
 
 #### JobRecord
 
@@ -481,25 +481,25 @@ pub struct JobRecord {
 }
 ```
 
-- **Purpose**: Collection of tasks with aggregated state
-- **Pattern**: State updated via `update_state_from_tasks(&[(TaskId, TaskState)])`
-- **Observability**: Timestamps track lifecycle
+- **目的**: 集約された状態を持つタスクのコレクション
+- **パターン**: `update_state_from_tasks(&[(TaskId, TaskState)])` 経由で状態を更新
+- **可観測性**: タイムスタンプがライフサイクルを追跡
 
 #### JobState
 
 ```rust
 pub enum JobState {
-    Running,      // At least one task is runnable
-    Completed,    // All tasks succeeded
-    Failed,       // Some tasks dead, none runnable
-    Cancelled,    // User cancelled
+    Running,      // 少なくとも1つのタスクが実行可能
+    Completed,    // 全タスクが成功
+    Failed,       // いくつかのタスクがDead、実行可能なタスクなし
+    Cancelled,    // ユーザーがキャンセル
 }
 ```
 
-- **Purpose**: Aggregated state from task states
-- **Derivation**: Computed from task states, not stored independently
+- **目的**: タスク状態から集約された状態
+- **導出**: タスク状態から計算され、独立して保存されない
 
-### 6. History Records (`domain/attempt.rs`)
+### 6. 履歴レコード (`domain/attempt.rs`)
 
 #### AttemptRecord
 
@@ -515,9 +515,9 @@ pub struct AttemptRecord {
 }
 ```
 
-- **Purpose**: Record of a single execution attempt
-- **Observability**: Enables "what was tried, what happened" explanations
-- **v1 status**: Defined but not yet persisted (future phase)
+- **目的**: 単一の実行試行の記録
+- **可観測性**: 「何を試行し、何が起こったか」の説明を可能にする
+- **v1ステータス**: 定義済みだがまだ永続化されていない（将来のフェーズ）
 
 #### DecisionRecord
 
@@ -532,11 +532,11 @@ pub struct DecisionRecord {
 }
 ```
 
-- **Purpose**: Record of "next action" choices
-- **Observability**: Enables "why did the system decide X" explanations
-- **v1 status**: Defined but not yet persisted (future phase)
+- **目的**: 「次のアクション」選択の記録
+- **可観測性**: 「システムがXを決定した理由」の説明を可能にする
+- **v1ステータス**: 定義済みだがまだ永続化されていない（将来のフェーズ）
 
-### 7. Decision Logic (`domain/decision.rs`)
+### 7. 決定ロジック (`domain/decision.rs`)
 
 #### Decision
 
@@ -547,9 +547,9 @@ pub enum Decision {
 }
 ```
 
-- **Purpose**: Output of Decider (what to do next)
-- **v1 scope**: Only retry/stop; future will add Decompose, AddDependency
-- **Pattern**: Pure data type (no logic)
+- **目的**: Deciderの出力（次に何をするか）
+- **v1スコープ**: リトライ/停止のみ、将来的にはDecompose、AddDependencyを追加
+- **パターン**: 純粋なデータ型（ロジックなし）
 
 #### Decider trait
 
@@ -559,21 +559,21 @@ pub trait Decider {
 }
 ```
 
-- **Purpose**: Pure function interface for decision logic (see ADR-0005)
-- **Pattern**: `current_state + observation → next_action`
-- **Extensibility**: Users can implement custom Deciders (AI agents, domain logic)
+- **目的**: 決定ロジックのための純粋関数インターフェース（ADR-0005参照）
+- **パターン**: `現在の状態 + 観測 → 次のアクション`
+- **拡張性**: ユーザーはカスタムDeciderを実装可能（AIエージェント、ドメインロジック）
 
 ---
 
-## Usage Examples
+## 使用例
 
-### Example 1: Creating and Submitting a Job
+### 例1: ジョブの作成と投入
 
 ```rust
 use weaver_core::domain::{JobSpec, TaskSpec, Budget};
 use weaver_core::Runtime;
 
-// Create task specifications
+// タスク仕様を作成
 let tasks = vec![
     TaskSpec {
         title: Some("Download file".to_string()),
@@ -586,24 +586,24 @@ let tasks = vec![
     TaskSpec::new("Process downloaded data"),
 ];
 
-// Create job spec with budget
+// 予算付きのジョブ仕様を作成
 let job_spec = JobSpec {
     tasks,
     budget: Budget {
         max_attempts_per_task: 3,
         max_total_attempts: Some(10),
-        deadline_ms: Some(60_000), // 60 seconds
+        deadline_ms: Some(60_000), // 60秒
         max_no_progress_steps: Some(50),
     },
 };
 
-// Submit to runtime
+// ランタイムに投入
 let runtime = Runtime::new();
 let job_id = runtime.submit_job(job_spec).await?;
 println!("Submitted job: {}", job_id);
 ```
 
-### Example 2: Task Handler Implementation
+### 例2: タスクハンドラの実装
 
 ```rust
 use weaver_core::domain::{TaskEnvelope, Outcome, OutcomeKind, Artifact};
@@ -623,7 +623,7 @@ impl TaskHandler for HttpRequestHandler {
         let url = task.payload()["url"].as_str()
             .ok_or_else(|| WeaverError::Other("Missing URL".into()))?;
 
-        // Execute HTTP request
+        // HTTPリクエストを実行
         match reqwest::get(url).await {
             Ok(response) => {
                 let body = response.text().await.unwrap();
@@ -649,7 +649,7 @@ impl TaskHandler for HttpRequestHandler {
 }
 ```
 
-### Example 3: Custom Decider Implementation
+### 例3: カスタムDeciderの実装
 
 ```rust
 use weaver_core::domain::{Decider, Decision, Outcome, OutcomeKind};
@@ -664,7 +664,7 @@ impl Decider for CustomDecider {
     fn decide(&self, task: &TaskRecord, outcome: &Outcome) -> Decision {
         match outcome.kind {
             OutcomeKind::Success => {
-                // Should not be called for success, but handle gracefully
+                // 成功時に呼ばれるべきではないが、優雅に処理
                 Decision::MarkDead {
                     reason: "Decider called on success".into(),
                 }
@@ -675,7 +675,7 @@ impl Decider for CustomDecider {
                         reason: format!("Max attempts ({}) exceeded", task.max_attempts),
                     }
                 } else {
-                    // Exponential backoff: 2^attempts seconds
+                    // 指数バックオフ: 2^試行回数 秒
                     let delay_secs = 2_u64.pow(task.attempts);
                     let delay = Duration::from_secs(delay_secs.min(self.max_retry_delay.as_secs()));
 
@@ -695,7 +695,7 @@ impl Decider for CustomDecider {
 }
 ```
 
-### Example 4: Querying Job Status
+### 例4: ジョブステータスのクエリ
 
 ```rust
 use weaver_core::Runtime;
@@ -718,14 +718,14 @@ async fn check_job_status(runtime: &Runtime, job_id: JobId) {
 }
 ```
 
-### Example 5: State Transition Pattern
+### 例5: 状態遷移パターン
 
 ```rust
 use weaver_core::queue::{TaskRecord, TaskState};
 use weaver_core::domain::{TaskEnvelope, TaskId, TaskType};
 use std::time::{Duration, Instant};
 
-// Create a new task
+// 新しいタスクを作成
 let envelope = TaskEnvelope::new(
     TaskId::new(1),
     TaskType::new("example"),
@@ -736,26 +736,26 @@ let mut task = TaskRecord::new(envelope, 5);
 assert_eq!(task.state, TaskState::Queued);
 assert_eq!(task.attempts, 0);
 
-// Worker leases and starts execution
+// Workerがリースして実行を開始
 task.start_attempt();
 assert_eq!(task.state, TaskState::Running);
 assert_eq!(task.attempts, 1);
 
-// Handler returns failure → schedule retry
+// ハンドラが失敗を返す → リトライをスケジュール
 let next_run = Instant::now() + Duration::from_secs(2);
 task.schedule_retry(next_run, "Connection timeout".into());
 assert_eq!(task.state, TaskState::RetryScheduled);
 assert_eq!(task.last_error, Some("Connection timeout".into()));
 
-// Backoff elapsed → requeue
+// バックオフ経過 → 再エンキュー
 task.requeue();
 assert_eq!(task.state, TaskState::Queued);
 
-// Try again
+// 再試行
 task.start_attempt();
 assert_eq!(task.attempts, 2);
 
-// This time succeeds
+// 今回は成功
 task.mark_succeeded();
 assert_eq!(task.state, TaskState::Succeeded);
 assert!(task.state.is_terminal());
@@ -763,131 +763,131 @@ assert!(task.state.is_terminal());
 
 ---
 
-## Design Decisions
+## 設計決定
 
-This section summarizes key architectural decisions. See individual ADRs for full context.
+このセクションでは、主要なアーキテクチャ決定を要約しています。完全なコンテキストについては、個別のADRを参照してください。
 
-### ADR-0001: Task ID Only Queue Design
+### ADR-0001: タスクIDのみのキュー設計
 
-**Summary**: Queue data structures (ready queue, scheduled queue) store `TaskId` only, not full `TaskRecord`.
+**要約**: キューデータ構造（readyキュー、scheduledキュー）は完全な `TaskRecord` ではなく、`TaskId` のみを保存します。
 
-**Rationale**:
-- Avoids lifetime issues with references
-- Single source of truth for state (TaskRecord in HashMap)
-- Easier to reason about ownership
+**根拠**:
+- 参照のライフタイム問題を回避
+- 状態の唯一の信頼できる情報源（HashMapのTaskRecord）
+- 所有権について推論しやすい
 
-**Impact**: Queue operations do two-step lookup (ID → Record), but this is acceptable for v1.
+**影響**: キュー操作は2段階のルックアップ（ID → Record）を行いますが、v1ではこれは許容範囲です。
 
-**Reference**: `dev/docs/adr/0001-task-id-only-queue-design.md`
+**参照**: `dev/docs/adr/0001-task-id-only-queue-design.md`
 
-### ADR-0002: State Transitions in TaskRecord
+### ADR-0002: TaskRecordでの状態遷移
 
-**Summary**: All state transitions are methods on `TaskRecord`, not external mutation.
+**要約**: すべての状態遷移は `TaskRecord` のメソッドであり、外部からの変更ではありません。
 
-**Rationale**:
-- Encapsulation: State changes are consistent and validated
-- Single responsibility: TaskRecord owns its state machine
-- Observability: `updated_at` timestamp automatically set
+**根拠**:
+- カプセル化: 状態変更は一貫性があり検証されている
+- 単一責任: TaskRecordは自身の状態マシンを所有
+- 可観測性: `updated_at` タイムスタンプが自動的に設定される
 
-**Impact**: Prevents invalid state transitions at compile time.
+**影響**: コンパイル時に無効な状態遷移を防ぎます。
 
-**Reference**: `dev/docs/adr/0002-state-transitions-in-taskrecord.md`
+**参照**: `dev/docs/adr/0002-state-transitions-in-taskrecord.md`
 
-### ADR-0003: Notify Outside Lock
+### ADR-0003: ロック外での通知
 
-**Summary**: Never call `notify` or `.await` while holding a lock. Clone/Arc data first.
+**要約**: ロックを保持したまま `notify` や `.await` を呼び出さないこと。最初にデータをClone/Arcします。
 
-**Rationale**:
-- Prevents deadlocks
-- Avoids latency spikes from slow handlers blocking the queue
-- Tokio async best practice
+**根拠**:
+- デッドロックを防ぐ
+- 遅いハンドラがキューをブロックすることによるレイテンシスパイクを回避
+- Tokio asyncのベストプラクティス
 
-**Pattern**:
+**パターン**:
 ```rust
-// BAD: notify inside lock
+// 悪い例: ロック内でnotify
 {
     let mut queue = self.queue.lock().await;
     queue.push(task);
-    self.notify.notify_one(); // <- DEADLOCK RISK
+    self.notify.notify_one(); // <- デッドロックリスク
 }
 
-// GOOD: notify outside lock
+// 良い例: ロック外でnotify
 {
     let mut queue = self.queue.lock().await;
     queue.push(task);
-} // lock released
-self.notify.notify_one(); // <- Safe
+} // ロック解放
+self.notify.notify_one(); // <- 安全
 ```
 
-**Reference**: `dev/docs/adr/0003-notify-outside-lock.md`
+**参照**: `dev/docs/adr/0003-notify-outside-lock.md`
 
-### ADR-0004: Tokio Select for Multiple Events
+### ADR-0004: 複数イベントのためのTokio Select
 
-**Summary**: Use `tokio::select!` to handle multiple concurrent events (new tasks, retry timers, shutdown).
+**要約**: `tokio::select!` を使用して複数の並行イベント（新しいタスク、リトライタイマー、シャットダウン）を処理します。
 
-**Rationale**:
-- Single event loop handles all triggers
-- Cancellation-safe for state transitions
-- Simplifies worker control flow
+**根拠**:
+- 単一のイベントループがすべてのトリガーを処理
+- 状態遷移に対してキャンセルセーフ
+- Workerの制御フローを簡素化
 
-**Pattern**:
+**パターン**:
 ```rust
 loop {
     tokio::select! {
         _ = notify.notified() => {
-            // New task available
+            // 新しいタスクが利用可能
         }
         _ = tokio::time::sleep_until(next_retry) => {
-            // Retry timer fired
+            // リトライタイマーが発火
         }
         _ = shutdown_rx.recv() => {
-            // Shutdown requested
+            // シャットダウンが要求された
             break;
         }
     }
 }
 ```
 
-**Reference**: `dev/docs/adr/0004-tokio-select-for-multiple-events.md`
+**参照**: `dev/docs/adr/0004-tokio-select-for-multiple-events.md`
 
-### ADR-0005: Decider Architecture
+### ADR-0005: Deciderアーキテクチャ
 
-**Summary**: Decision logic is a pure function trait (`Decider`) that returns `Decision` enum.
+**要約**: 決定ロジックは `Decision` enumを返す純粋関数トレイト（`Decider`）です。
 
-**Rationale**:
-- Separates "what to do next" logic from execution infrastructure
-- Enables custom decision strategies (AI agents, domain-specific logic)
-- Pure functions are testable and composable
-- Follows functional programming principles
+**根拠**:
+- 「次に何をするか」のロジックを実行インフラから分離
+- カスタム決定戦略（AIエージェント、ドメイン固有ロジック）を可能にする
+- 純粋関数はテスト可能で合成可能
+- 関数型プログラミングの原則に従う
 
-**Pattern**:
+**パターン**:
 ```rust
 pub trait Decider {
     fn decide(&self, task: &TaskRecord, outcome: &Outcome) -> Decision;
 }
 ```
 
-**Impact**: Queue/Worker call Decider to determine next action; Decider has no side effects.
+**影響**: Queue/WorkerはDeciderを呼び出して次のアクションを決定します。Deciderは副作用を持ちません。
 
-**Reference**: `dev/docs/adr/0005-decider-architecture.md`
+**参照**: `dev/docs/adr/0005-decider-architecture.md`
 
-### Potential Future ADRs
+### 将来の潜在的なADR
 
-The following design decisions may warrant ADRs as the system evolves:
+システムが進化するにつれて、以下の設計決定がADRを必要とする可能性があります：
 
-1. **Artifact Storage Strategy**: How to store/retrieve large artifacts (files, logs)
-2. **Dependency Resolution**: How to handle inter-task dependencies and DAG execution
-3. **Decomposition Strategy**: How tasks break down into subtasks
-4. **Persistence Layer**: Queue/Record persistence interface design
-5. **Distributed Coordination**: When/how to add multi-process support
+1. **Artifact保存戦略**: 大きなアーティファクト（ファイル、ログ）の保存/取得方法
+2. **依存関係解決**: タスク間の依存関係とDAG実行の処理方法
+3. **分解戦略**: タスクがサブタスクに分解される方法
+4. **永続化レイヤー**: Queue/Record永続化インターフェース設計
+5. **分散協調**: マルチプロセスサポートを追加する時期と方法
 
 ---
 
-## Appendix: Quick Reference
+## 付録: クイックリファレンス
 
-### File to Structure Mapping
+### ファイルと構造のマッピング
 
-| File | Primary Structures |
+| ファイル | 主要な構造 |
 |------|-------------------|
 | `domain/ids.rs` | JobId, TaskId, AttemptId |
 | `domain/spec.rs` | JobSpec, TaskSpec, Budget |
@@ -902,15 +902,15 @@ The following design decisions may warrant ADRs as the system evolves:
 | `queue/retry.rs` | RetryPolicy |
 | `error.rs` | WeaverError |
 
-### Common Patterns Cheat Sheet
+### 一般的なパターンのチートシート
 
-**Creating a task**:
+**タスクの作成**:
 ```rust
 let envelope = TaskEnvelope::new(task_id, task_type, payload);
 let task_record = TaskRecord::new(envelope, max_attempts);
 ```
 
-**State transitions**:
+**状態遷移**:
 ```rust
 task.start_attempt();           // Queued → Running
 task.mark_succeeded();          // Running → Succeeded
@@ -919,7 +919,7 @@ task.requeue();                 // RetryScheduled → Queued
 task.mark_dead(err);            // Running → Dead
 ```
 
-**Creating outcomes**:
+**結果の作成**:
 ```rust
 Outcome::success()
 Outcome::failure("reason")
@@ -927,7 +927,7 @@ Outcome::failure("reason")
     .with_retry_hint(serde_json::json!({"delay_ms": 1000}))
 ```
 
-**Decision logic**:
+**決定ロジック**:
 ```rust
 impl Decider for MyDecider {
     fn decide(&self, task: &TaskRecord, outcome: &Outcome) -> Decision {
@@ -942,6 +942,6 @@ impl Decider for MyDecider {
 
 ---
 
-**Document Status**: Living document, updated as architecture evolves
-**Last Updated**: 2025-12-30
-**Next Review**: After Phase 4 completion (Decider integration)
+**ドキュメントステータス**: リビングドキュメント、アーキテクチャの進化に応じて更新
+**最終更新**: 2025-12-30
+**次回レビュー**: フェーズ4完了後（Decider統合）
