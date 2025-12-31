@@ -2,8 +2,6 @@
 
 use std::time::Instant;
 
-use serde::{Deserialize, Serialize};
-
 use super::ids::{AttemptId, TaskId};
 use super::outcome::{Artifact, Outcome};
 
@@ -15,7 +13,7 @@ use super::outcome::{Artifact, Outcome};
 /// - What happened (outcome)
 ///
 /// This is the foundation of "explain why" capability.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct AttemptRecord {
     pub attempt_id: AttemptId,
     pub task_id: TaskId,
@@ -40,16 +38,6 @@ pub struct AttemptRecord {
 
 impl AttemptRecord {
     /// Create a new attempt record.
-    ///
-    /// TODO(human): Implement AttemptRecord constructor.
-    /// Parameters:
-    /// - attempt_id: AttemptId
-    /// - task_id: TaskId
-    /// - action: serde_json::Value
-    /// - observation: Vec<Artifact>
-    /// - outcome: Outcome
-    ///
-    /// Set started_at and completed_at to Instant::now() for v1 simplicity.
     /// (In production, you'd track actual start/completion times separately)
     pub fn new(
         attempt_id: AttemptId,
@@ -58,8 +46,15 @@ impl AttemptRecord {
         observation: Vec<Artifact>,
         outcome: Outcome,
     ) -> Self {
-        // TODO(human): Implement constructor
-        unimplemented!("AttemptRecord::new")
+        Self {
+            attempt_id,
+            task_id,
+            action,
+            observation,
+            outcome,
+            started_at: Instant::now(),
+            completed_at: Instant::now(),
+        }
     }
 }
 
@@ -71,7 +66,7 @@ impl AttemptRecord {
 /// - What action was taken (retry, decompose, add dependency, stop, etc.)
 ///
 /// This enables "why did the system do X" explanations.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DecisionRecord {
     pub task_id: TaskId,
 
@@ -96,16 +91,6 @@ pub struct DecisionRecord {
 
 impl DecisionRecord {
     /// Create a new decision record.
-    ///
-    /// TODO(human): Implement DecisionRecord constructor.
-    /// Parameters:
-    /// - task_id: TaskId
-    /// - trigger: serde_json::Value
-    /// - policy: String
-    /// - decision: String
-    /// - context: Option<serde_json::Value>
-    ///
-    /// Set decided_at to Instant::now().
     pub fn new(
         task_id: TaskId,
         trigger: serde_json::Value,
@@ -113,7 +98,13 @@ impl DecisionRecord {
         decision: impl Into<String>,
         context: Option<serde_json::Value>,
     ) -> Self {
-        // TODO(human): Implement constructor
-        unimplemented!("DecisionRecord::new")
+        Self {
+            task_id,
+            trigger,
+            policy: policy.into(),
+            decision: decision.into(),
+            context,
+            decided_at: Instant::now(),
+        }
     }
 }

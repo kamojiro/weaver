@@ -69,6 +69,7 @@ impl JobRecord {
 
     /// Update job state based on task states.
     pub fn update_state_from_tasks(&mut self, task_states: &[(TaskId, crate::queue::TaskState)]) {
+        // TODO(human): Implement job state aggregation logic here
         let state = {
             if task_states.is_empty() {
                 JobState::Running

@@ -43,6 +43,13 @@ impl RetryPolicy {
     /// - attempt 4: 16s
     /// - attempt 5: 32s
     pub fn next_delay(&self, attempts: u32) -> Duration {
+        // TODO(human): Implement exponential backoff logic here.
+        // Calculate: base_delay * multiplier^(attempts - 1)
+        // Hints:
+        // - Use attempts.saturating_sub(1) to get the exponent (0-indexed)
+        // - Use f64::powi() for power calculation
+        // - Convert Duration to f64 (as_secs_f64), calculate, then from_secs_f64
+        // - Handle edge cases: attempts=0 should probably use base_delay
         let base_secs = self.base_delay.as_secs_f64();
         let delay_secs = base_secs * self.multiplier.powi((attempts.saturating_sub(1)) as i32);
         Duration::from_secs_f64(delay_secs)

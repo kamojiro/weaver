@@ -32,7 +32,10 @@ This is a **v1 implementation** focused on single-process execution with in-memo
   - Understanding ownership, lifetimes, and async patterns through practice
   - Making design decisions with trade-off analysis
 
-See `dev/learning/` for current learning tasks and progress.
+**Learning task management:**
+- `dev/learning/tasks.md` - Master task list for all phases (check here for what needs to be done)
+- `dev/learning/YYYY_MM_DD.md` - Daily implementation logs (detailed records with code and insights)
+- `dev/learning/README.md` - Usage guide for the learning directory
 
 ## Architecture
 
