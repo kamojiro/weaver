@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::time::{Duration, sleep};
 
-use weaver_core::domain::{TaskEnvelope, TaskId, TaskType};
+use weaver_core::domain::{DefaultDecider, Outcome, TaskEnvelope, TaskId, TaskType};
 use weaver_core::error::WeaverError;
 use weaver_core::queue::{InMemoryQueue, Queue, RetryPolicy};
 use weaver_core::runtime::{HandlerRegistry, Runtime, TaskHandler};
@@ -30,7 +30,7 @@ impl HelloHandler {
 
 #[async_trait]
 impl TaskHandler for HelloHandler {
-    async fn handle(&self, envelope: &TaskEnvelope) -> Result<(), WeaverError> {
+    async fn handle(&self, envelope: &TaskEnvelope) -> Result<Outcome, WeaverError> {
         // Payload を JSON として decode
         let p: HelloPayload = serde_json::from_value(envelope.payload().clone())
             .map_err(|e| WeaverError::Other(format!("json decode: {e}")))?;
@@ -38,13 +38,13 @@ impl TaskHandler for HelloHandler {
         let left = self.remaining_failures.load(Ordering::Relaxed);
         if left > 0 {
             self.remaining_failures.fetch_sub(1, Ordering::Relaxed);
-            return Err(WeaverError::Other(format!(
+            return Ok(Outcome::failure(format!(
                 "intentional failure (left={left})"
             )));
         }
 
         println!("✓ Hello, {}!", p.name);
-        Ok(())
+        Ok(Outcome::success())
     }
 }
 
@@ -60,8 +60,10 @@ async fn main() {
         .expect("register handler");
     let runtime = Arc::new(Runtime::new(Arc::new(reg)));
 
+    let default_decider = Arc::new(DefaultDecider::default_v1());
+
     // (B) Worker を起動（1本）
-    let workers = WorkerGroup::spawn(1, queue.clone(), runtime.clone());
+    let workers = WorkerGroup::spawn(1, queue.clone(), runtime.clone(), default_decider);
 
     // (C) タスク投入
     let task_id = TaskId::new(1); // 手動でIDを割り当て（本来はQueueが管理）

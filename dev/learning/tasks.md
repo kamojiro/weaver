@@ -9,7 +9,8 @@
 
 - ✅ Phase 1: 基礎実装（完了）
 - ✅ Phase 2: Job-level Abstraction（完了）
-- ✅ Phase 3: Attempt/Decision 記録（実装部分完了）
+- ✅ Phase 3: Attempt/Decision 記録（完了）
+- ✅ Phase 4-1: Decider 統合（完了）
 - ⏳ Phase 4: Task 分解
 - ⏳ Phase 5: 依存関係管理
 - ⏳ Phase 6: Budget と Stuck 検知
@@ -54,11 +55,10 @@ Task 単位から Job（複数タスクの集合）単位への拡張。
 
 ---
 
-## Phase 3: Attempt/Decision の記録 ✅ 完了（実装部分）
+## Phase 3: Attempt/Decision の記録 ✅ 完了
 
 実行履歴と判断の記録を残す仕組み。
 
-### 完了
 - [x] AttemptRecord 構造体の定義
 - [x] DecisionRecord 構造体の定義
 - [x] AttemptRecord::new コンストラクタ
@@ -74,13 +74,64 @@ Task 単位から Job（複数タスクの集合）単位への拡張。
   - [x] mark_dead パスでの記録
   - [x] schedule_retry パスでの記録
 
-### 未完了（将来的に Phase 7 で実装）
-- [ ] 履歴取得 API
-- [ ] Job レベルでの履歴集約
-
 **ゴール**: 「なぜこの結果になったか」を説明可能にする ✅ 達成
 **完了日**: 2025-12-30
 **学習記録**: `dev/learning/2025_12_29.md`, `dev/learning/2025_12_30.md`
+
+**注**: 履歴取得 API と Job レベルでの履歴集約は Phase 7 で実装予定
+
+---
+
+## Phase 4-1: Decider 統合 ✅ 完了
+
+Handler → Outcome → Decider → Decision フローを実行エンジンに統合する。
+
+### 完了（全ステップ）
+- [x] Step 1: TaskLease Interface の拡張
+  - [x] `get_task_record()` メソッド追加
+  - [x] `complete(outcome, decision)` メソッド追加
+- [x] Step 2: Handler Trait の変更
+  - [x] `handle()` の戻り値を `Result<Outcome, WeaverError>` に変更
+  - [x] Runtime::execute() の更新
+- [x] Step 3: Decider を Worker に統合
+  - [x] WorkerGroup::spawn() に decider パラメータ追加
+  - [x] Decider trait に Send + Sync 追加
+- [x] Step 4: Worker Loop Flow の実装
+  - [x] Handler → Outcome → Decider → Decision のフロー実装
+  - [x] SUCCESS 時の最適化（Decider バイパス）
+  - [x] インフラエラーの Outcome 変換
+- [x] Step 5: get_task_record() の実装
+  - [x] InMemoryLease::get_task_record() 実装
+- [x] Step 6: complete() の実装
+  - [x] AttemptRecord 作成と挿入
+  - [x] Decision に基づく分岐（Retry/MarkDead）
+  - [x] ADR-0003 準拠（lock-outside-notify）
+- [x] Step 6.5: complete() の単体テスト
+  - [x] Retry decision パスのテスト
+  - [x] MarkDead decision パスのテスト
+  - [x] レコード作成の検証
+
+### 完了（続き）
+- [x] Step 7: Handler 更新（CLI の HelloHandler を新パターンに変換）
+  - [x] HelloHandler を `Result<Outcome, WeaverError>` に更新
+  - [x] main 関数で DefaultDecider を作成
+  - [x] 動作確認（`cargo run -p weaver-cli`）
+- [x] Step 8: 統合テスト
+  - [x] test_worker_retry_flow_integration（リトライフロー全体）
+  - [x] test_worker_max_attempts_exceeded（max_attempts 超過）
+  - [x] test_worker_immediate_success（即座に成功）
+- [x] Step 9: CLI 動作確認（Step 7 で実施）
+- [x] Step 10: ドキュメント更新
+  - [x] ADR-0005 を "Accepted" に更新
+  - [x] learning 記録の最終更新
+
+**ゴール**: ✅ 純粋関数（Decider）と副作用（Worker/TaskLease）の分離、カスタマイズ可能な判断ロジック
+**開始日**: 2026-01-01
+**完了日**: 2026-01-02
+**学習記録**: `dev/learning/2026_01_01.md`, `dev/learning/2026_01_02.md`
+**関連 ADR**: `dev/docs/adr/0005-decider-architecture.md` (Accepted)
+
+**テスト結果**: 全31テストパス（単体テスト + 統合テスト）
 
 ---
 

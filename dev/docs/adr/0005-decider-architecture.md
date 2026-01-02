@@ -2,9 +2,14 @@
 
 ## ステータス
 
-**提案中 (Proposed)** - 2025-12-30
+**承認済み (Accepted)** - 2026-01-02
 
-Phase 4-1 の実装途中。Decision/Decider trait は定義済み、DefaultDecider はこれから実装。
+- **提案日**: 2025-12-30
+- **実装開始**: 2026-01-01
+- **実装完了**: 2026-01-02
+- **承認日**: 2026-01-02
+
+Phase 4-1 の実装が完了し、Handler → Outcome → Decider → Decision フローが正常に動作することを確認しました。
 
 ## コンテキスト
 
@@ -182,15 +187,30 @@ v1 では正しい設計を追求し、移行コストを受け入れる。
 
 ## 実装計画
 
-### Phase 4-1: 最小限の Decider（retry のみ）
+### Phase 4-1: 最小限の Decider（retry のみ）✅ 完了
 
 1. ✅ Decision enum の定義（Retry/MarkDead）
-2. ✅ Decider trait の定義
-3. ⏳ DefaultDecider の実装（RetryPolicy ロジックを移行）
-4. ⏳ TaskHandler trait の変更（Outcome を返す）
-5. ⏳ TaskLease の変更（complete メソッド）
-6. ⏳ Worker の変更（新しいフロー）
-7. ⏳ テスト
+2. ✅ Decider trait の定義（Send + Sync 制約追加）
+3. ✅ DefaultDecider の実装（RetryPolicy ロジックを移行）
+4. ✅ TaskHandler trait の変更（Outcome を返す）
+5. ✅ TaskLease の変更（complete メソッド、get_task_record メソッド）
+6. ✅ Worker の変更（新しいフロー、Decider 統合）
+7. ✅ テスト（complete() の単体テスト、CLI での動作確認）
+
+**実装ファイル:**
+- `crates/weaver-core/src/domain/decision.rs` - Decision, Decider, DefaultDecider
+- `crates/weaver-core/src/domain/outcome.rs` - Outcome, OutcomeKind, Artifact
+- `crates/weaver-core/src/runtime.rs` - TaskHandler trait の変更
+- `crates/weaver-core/src/worker.rs` - Worker loop フロー実装
+- `crates/weaver-core/src/queue/mod.rs` - TaskLease trait の拡張
+- `crates/weaver-core/src/queue/memory.rs` - complete(), get_task_record() 実装
+- `crates/weaver-cli/src/main.rs` - HelloHandler の更新、DefaultDecider 統合
+
+**テスト:**
+- `test_complete_with_retry_decision` - Retry パスのテスト
+- `test_complete_with_mark_dead_decision` - MarkDead パスのテスト
+- `test_complete_creates_both_records` - AttemptRecord + DecisionRecord の作成確認
+- CLI 実行テスト - end-to-end フロー動作確認
 
 ### Phase 4-2: 分解機能の追加
 
@@ -227,9 +247,40 @@ v1 では正しい設計を追求し、移行コストを受け入れる。
 
 ## メモ
 
-この ADR は Phase 4-1 の実装途中で作成されました。実装を通じて設計の妥当性を検証し、必要に応じて更新します。
+### 実装履歴
 
-特に、以下の点について実装しながら学ぶアプローチを取ります：
-- Decider の入力として TaskRecord + Outcome で十分か
-- DefaultDecider の実装における RetryPolicy の扱い
-- Worker での Decision 実行の具体的な実装方法
+**提案（2025-12-30）:**
+この ADR は Phase 4-1 の実装途中で作成されました。実装を通じて設計の妥当性を検証することを計画しました。
+
+**実装完了（2026-01-02）:**
+Phase 4-1 の実装を完了し、以下の点について検証しました：
+
+1. **Decider の入力として TaskRecord + Outcome で十分か**
+   - ✅ 十分であることを確認。DefaultDecider は TaskRecord.attempts と max_attempts のみを使用し、Outcome の kind は将来の拡張用に保持。
+
+2. **DefaultDecider の実装における RetryPolicy の扱い**
+   - ✅ DefaultDecider が RetryPolicy を保持する設計で実装。
+   - ✅ `DefaultDecider::default_v1()` convenience constructor を提供。
+
+3. **Worker での Decision 実行の具体的な実装方法**
+   - ✅ `TaskLease::complete(outcome, decision)` メソッドで Decision を実行。
+   - ✅ ADR-0003（lock-outside-notify）に準拠した実装。
+   - ✅ SUCCESS 時は Decider をバイパスして ack() を直接呼ぶ最適化を実装。
+
+### 実装で得られた知見
+
+1. **インフラエラーとビジネスエラーの区別**
+   - `Err(WeaverError)`: インフラエラー → Worker が `Outcome::failure()` に変換
+   - `Ok(Outcome::failure())`: ビジネスエラー → Decider が判断
+   - この区別により、Handler が実行結果を観測・報告する責務を果たせる。
+
+2. **Send + Sync 制約の必要性**
+   - Decider trait に Send + Sync を追加する必要があった（tokio::spawn で Arc<dyn Decider> を渡すため）。
+
+3. **テスタビリティの向上**
+   - Decider が純粋関数であるため、単体テストが容易。
+   - complete() メソッドのテストで AttemptRecord と DecisionRecord の両方が作成されることを確認。
+
+### 次のステップ
+
+Phase 4-2 では、Decision::Decompose を追加し、タスク分解機能を実装する予定です。
