@@ -9,8 +9,8 @@ use tokio::sync::{Mutex, Notify};
 
 use super::{RetryPolicy, TaskRecord, TaskState};
 use crate::domain::{
-    Artifact, AttemptId, AttemptRecord, DecisionRecord, JobId, JobRecord, JobSpec, Outcome,
-    TaskEnvelope, TaskId,
+    Artifact, AttemptId, AttemptRecord, Decision, DecisionRecord, JobId, JobRecord, JobSpec,
+    Outcome, TaskEnvelope, TaskId,
 };
 use crate::error::WeaverError;
 use crate::observability::QueueCounts;
@@ -306,6 +306,89 @@ impl TaskLease for InMemoryLease {
         &self.envelope
     }
 
+    async fn get_task_record(&self) -> Result<TaskRecord, WeaverError> {
+        let state = self.queue.lock().await;
+        state
+            .records
+            .get(&self.task_id)
+            .cloned()
+            .ok_or_else(|| WeaverError::Other("task record not found".into()))
+    }
+
+    async fn complete(
+        self: Box<Self>,
+        outcome: Outcome,
+        decision: Decision,
+    ) -> Result<(), WeaverError> {
+        let attempt_record = {
+            let mut state = self.queue.lock().await;
+
+            // First, do all state operations (allocate, insert)
+            let attempt_id = state.allocate_attempt_id();
+            let attempt_record = AttemptRecord::new(
+                attempt_id,
+                self.task_id,
+                self.envelope.payload().clone(),
+                outcome.artifacts.clone(),
+                outcome.clone(),
+            );
+            state.attempts.insert(attempt_id, attempt_record.clone());
+            attempt_record
+        };
+
+        let should_notify = match decision {
+            Decision::Retry { delay, reason } => {
+                let next_run_at = Instant::now() + delay;
+                let decision_record = DecisionRecord::new(
+                    self.task_id,
+                    serde_json::json!({
+                        "attempt_id": attempt_record.attempt_id,
+                        "outcome": format!("{:?}", outcome.kind),
+                    }),
+                    "retry_policy".to_string(),
+                    "schedule_retry".to_string(),
+                    Some(serde_json::json!({
+                        "delay_secs": delay.as_secs(),
+                        "next_run_at": format!("{:?}", next_run_at),
+                    })),
+                );
+                let mut state = self.queue.lock().await;
+                if let Some(record) = state.records.get_mut(&self.task_id) {
+                    record.schedule_retry(next_run_at, reason);
+                    state.decisions.push(decision_record);
+                    state.scheduled.push(ScheduledTask {
+                        next_run_at,
+                        task_id: self.task_id,
+                    });
+                }
+                true
+            }
+            Decision::MarkDead { reason } => {
+                let decision_record = DecisionRecord::new(
+                    self.task_id,
+                    serde_json::json!({
+                        "attempt_id": attempt_record.attempt_id,
+                        "outcome": format!("{:?}", outcome.kind),
+                    }),
+                    "retry_policy".to_string(),
+                    "mark_dead".to_string(),
+                    None,
+                );
+                let mut state = self.queue.lock().await;
+                if let Some(record) = state.records.get_mut(&self.task_id) {
+                    record.mark_dead(reason);
+                    state.decisions.push(decision_record);
+                };
+                false
+            }
+        };
+
+        if should_notify {
+            self.notify.notify_one();
+        }
+        Ok(())
+    }
+
     async fn ack(self: Box<Self>) -> Result<(), WeaverError> {
         let mut state = self.queue.lock().await;
 
@@ -360,7 +443,7 @@ impl TaskLease for InMemoryLease {
                 // Schedule retry with backoff
                 let delay = self.retry_policy.next_delay(record.attempts);
                 let next_run_at = Instant::now() + delay;
- 
+
                 let trigger = serde_json::json!({
                     "error": error,
                     "attempts": record.attempts,
@@ -403,7 +486,10 @@ mod tests {
     use std::os::linux::raw::stat;
 
     use super::*;
-    use crate::{domain::{OutcomeKind, TaskId, TaskType, decision}, queue};
+    use crate::{
+        domain::{OutcomeKind, TaskId, TaskType, decision},
+        queue,
+    };
 
     #[tokio::test]
     async fn enqueue_and_counts() {
@@ -468,13 +554,12 @@ mod tests {
     async fn test_attempt_record_is_saved_on_ack() {
         let queue = InMemoryQueue::new(RetryPolicy::default_v1());
         let task = TaskEnvelope::new(
-            TaskId::new(1001),  // Note: enqueue() will allocate a new task_id
+            TaskId::new(1001), // Note: enqueue() will allocate a new task_id
             TaskType::new("test_task"),
             serde_json::json!({"key": "value"}),
         );
         queue.enqueue(task).await.unwrap();
         let lease = queue.lease().await.unwrap();
-        let task_id = lease.envelope().task_id();  // Get the actual allocated task_id
         lease.ack().await.unwrap();
         let attempts = queue.get_all_attempts().await;
         assert_eq!(attempts.len(), 1);
@@ -509,10 +594,8 @@ mod tests {
         assert!(attempt.observation.len() == 1);
         match &attempt.observation[0] {
             Artifact::Stdout(msg) => assert_eq!(msg, "test error"),
-            _ => panic!("Expected Artifact::Stdout"), 
+            _ => panic!("Expected Artifact::Stdout"),
         }
-
-
     }
 
     #[tokio::test]
@@ -541,8 +624,146 @@ mod tests {
         assert_eq!(decisions[0].policy, "retry_policy");
         assert_eq!(decisions[0].trigger["attempts"], 1);
         assert_eq!(decisions[0].trigger["max_attempts"], 1);
+    }
 
+    // Phase 4-1 tests: complete() with Decider flow
 
+    #[tokio::test]
+    async fn test_complete_with_retry_decision() {
+        use crate::domain::{DefaultDecider, Outcome, OutcomeKind};
+        use std::time::Duration;
 
+        let queue = InMemoryQueue::new(RetryPolicy::default_v1());
+        let task = TaskEnvelope::new(
+            TaskId::new(2001), // Note: enqueue() will allocate a new task_id
+            TaskType::new("test_task"),
+            serde_json::json!({"test": "data"}),
+        );
+        queue.enqueue(task).await.unwrap();
+
+        let lease = queue.lease().await.unwrap();
+
+        // Create a failure outcome
+        let outcome = Outcome::failure("test failure");
+
+        // Create a retry decision
+        let decision = Decision::Retry {
+            delay: Duration::from_secs(5),
+            reason: "retry test".to_string(),
+        };
+
+        // Call complete
+        lease.complete(outcome, decision).await.unwrap();
+
+        // Verify AttemptRecord was created
+        let attempts = queue.get_all_attempts().await;
+        assert_eq!(attempts.len(), 1);
+        assert!(attempts[0].outcome.kind == OutcomeKind::Failure);
+
+        // Get the actual task_id from the AttemptRecord (which has the correct allocated ID)
+        let task_id = attempts[0].task_id;
+
+        // Verify DecisionRecord was created
+        let decisions = queue.get_decisions().await;
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].decision, "schedule_retry");
+        assert_eq!(decisions[0].policy, "retry_policy");
+
+        // Verify task was scheduled for retry
+        let state = queue.state.lock().await;
+        let record = state.records.get(&task_id).unwrap();
+        assert_eq!(record.state, TaskState::RetryScheduled);
+        assert_eq!(state.scheduled.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_complete_with_mark_dead_decision() {
+        use crate::domain::{DefaultDecider, Outcome, OutcomeKind};
+
+        let queue = InMemoryQueue::new(RetryPolicy::default_v1());
+        let task = TaskEnvelope::new(
+            TaskId::new(2002), // Note: enqueue() will allocate a new task_id
+            TaskType::new("test_task"),
+            serde_json::json!({"test": "data"}),
+        );
+        queue.enqueue(task).await.unwrap();
+
+        let lease = queue.lease().await.unwrap();
+
+        // Create a failure outcome
+        let outcome = Outcome::failure("final failure");
+
+        // Create a mark_dead decision
+        let decision = Decision::MarkDead {
+            reason: "max attempts reached".to_string(),
+        };
+
+        // Call complete
+        lease.complete(outcome, decision).await.unwrap();
+
+        // Verify AttemptRecord was created
+        let attempts = queue.get_all_attempts().await;
+        assert_eq!(attempts.len(), 1);
+        assert!(attempts[0].outcome.kind == OutcomeKind::Failure);
+
+        // Get the actual task_id from the AttemptRecord (which has the correct allocated ID)
+        let task_id = attempts[0].task_id;
+
+        // Verify DecisionRecord was created
+        let decisions = queue.get_decisions().await;
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].decision, "mark_dead");
+        assert_eq!(decisions[0].policy, "retry_policy");
+
+        // Verify task was marked dead
+        let state = queue.state.lock().await;
+        let record = state.records.get(&task_id).unwrap();
+        assert_eq!(record.state, TaskState::Dead);
+    }
+
+    #[tokio::test]
+    async fn test_complete_creates_both_records() {
+        use crate::domain::Outcome;
+        use std::time::Duration;
+
+        let queue = InMemoryQueue::new(RetryPolicy::default_v1());
+        let task = TaskEnvelope::new(
+            TaskId::new(2003),
+            TaskType::new("test_task"),
+            serde_json::json!({"key": "value"}),
+        );
+        queue.enqueue(task).await.unwrap();
+
+        let lease = queue.lease().await.unwrap();
+
+        let outcome = Outcome {
+            kind: OutcomeKind::Failure,
+            reason: Some("test error".to_string()),
+            artifacts: vec![Artifact::Stderr("error details".to_string())],
+            retry_hint: None,
+            alternatives: vec![],
+        };
+
+        let decision = Decision::Retry {
+            delay: Duration::from_secs(10),
+            reason: "retry with backoff".to_string(),
+        };
+
+        lease.complete(outcome.clone(), decision).await.unwrap();
+
+        // Verify both AttemptRecord and DecisionRecord were created
+        let attempts = queue.get_all_attempts().await;
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].observation.len(), 1);
+        match &attempts[0].observation[0] {
+            Artifact::Stderr(msg) => assert_eq!(msg, "error details"),
+            _ => panic!("Expected Artifact::Stderr"),
+        }
+
+        let decisions = queue.get_decisions().await;
+        assert_eq!(decisions.len(), 1);
+        assert!(decisions[0].context.is_some());
+        let context = decisions[0].context.as_ref().unwrap();
+        assert_eq!(context["delay_secs"], 10);
     }
 }

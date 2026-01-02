@@ -3,16 +3,26 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::domain::{TaskEnvelope, TaskType};
+use crate::domain::{Outcome, TaskEnvelope, TaskType};
 use crate::error::WeaverError;
 
 /// A handler for a specific task type.
 ///
-/// v1: take the whole `TaskEnvelope` so the handler can decode payload as it likes.
-/// (JSON decode, bytes, etc.)
+/// Phase 4-1: Handler returns Outcome to indicate SUCCESS/FAILURE/BLOCKED.
+///
+/// # Returns
+/// - `Ok(Outcome)`: Handler executed successfully (business logic result)
+///   - `Outcome::Success`: Task completed successfully
+///   - `Outcome::Failure`: Task failed (retriable business failure)
+///   - `Outcome::Blocked`: Task blocked (needs intervention)
+/// - `Err(WeaverError)`: Infrastructure failure (JSON decode error, handler panic, etc.)
+///
+/// The distinction between `Err(WeaverError)` and `Ok(Outcome::Failure)`:
+/// - `Err`: Couldn't execute at all (infrastructure problem)
+/// - `Ok(Outcome::Failure)`: Executed but failed (business problem)
 #[async_trait]
 pub trait TaskHandler: Send + Sync {
-    async fn handle(&self, envelope: &TaskEnvelope) -> Result<(), WeaverError>;
+    async fn handle(&self, envelope: &TaskEnvelope) -> Result<Outcome, WeaverError>;
 }
 
 /// Registry of handlers (task_type -> handler).
@@ -76,7 +86,9 @@ impl Runtime {
     }
 
     /// Execute one envelope.
-    pub async fn execute(&self, envelope: &TaskEnvelope) -> Result<(), WeaverError> {
+    ///
+    /// Phase 4-1: Returns Outcome to support Handler → Outcome → Decider flow.
+    pub async fn execute(&self, envelope: &TaskEnvelope) -> Result<Outcome, WeaverError> {
         let task_type = envelope.task_type();
         let handler = self
             .registry
@@ -96,8 +108,8 @@ mod tests {
 
     #[async_trait]
     impl TaskHandler for OkHandler {
-        async fn handle(&self, _envelope: &TaskEnvelope) -> Result<(), WeaverError> {
-            Ok(())
+        async fn handle(&self, _envelope: &TaskEnvelope) -> Result<Outcome, WeaverError> {
+            Ok(Outcome::success())
         }
     }
 
@@ -110,7 +122,8 @@ mod tests {
         let rt = Runtime::new(Arc::new(reg));
 
         let env = TaskEnvelope::new(TaskId::new(1), TaskType::new("ok"), serde_json::json!({}));
-        rt.execute(&env).await.unwrap();
+        let outcome = rt.execute(&env).await.unwrap();
+        assert_eq!(outcome.kind, crate::domain::OutcomeKind::Success);
     }
 
     #[tokio::test]
