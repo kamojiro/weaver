@@ -2,6 +2,8 @@
 
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
+
 use super::ids::{AttemptId, TaskId};
 use super::outcome::{Artifact, Outcome};
 
@@ -13,7 +15,7 @@ use super::outcome::{Artifact, Outcome};
 /// - What happened (outcome)
 ///
 /// This is the foundation of "explain why" capability.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AttemptRecord {
     pub attempt_id: AttemptId,
     pub task_id: TaskId,
@@ -29,10 +31,12 @@ pub struct AttemptRecord {
     /// The result of this attempt.
     pub outcome: Outcome,
 
-    /// When this attempt started.
+    /// When this attempt started (not serialized in v1).
+    #[serde(skip_serializing, skip_deserializing, default = "Instant::now")]
     pub started_at: Instant,
 
-    /// When this attempt completed (or failed/blocked).
+    /// When this attempt completed (or failed/blocked) (not serialized in v1).
+    #[serde(skip_serializing, skip_deserializing, default = "Instant::now")]
     pub completed_at: Instant,
 }
 
@@ -66,7 +70,7 @@ impl AttemptRecord {
 /// - What action was taken (retry, decompose, add dependency, stop, etc.)
 ///
 /// This enables "why did the system do X" explanations.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecisionRecord {
     pub task_id: TaskId,
 
@@ -85,7 +89,8 @@ pub struct DecisionRecord {
     /// Additional context (flexible for v1).
     pub context: Option<serde_json::Value>,
 
-    /// When this decision was made.
+    /// When this decision was made (not serialized in v1).
+    #[serde(skip_serializing, skip_deserializing, default = "Instant::now")]
     pub decided_at: Instant,
 }
 

@@ -7,10 +7,10 @@ use std::time::Instant;
 use async_trait::async_trait;
 use tokio::sync::{Mutex, Notify};
 
-use super::{RetryPolicy, TaskRecord, TaskState};
+use super::{DependencyGraph, RetryPolicy, TaskRecord, TaskState};
 use crate::domain::{
-    Artifact, AttemptId, AttemptRecord, Decision, DecisionRecord, JobId, JobRecord, JobSpec,
-    Outcome, TaskEnvelope, TaskId, TaskSpec,
+    Artifact, AttemptId, AttemptRecord, Decision, DecisionRecord, JobId, JobRecord, JobResult,
+    JobSpec, JobStateView, JobStatus, Outcome, TaskEnvelope, TaskId, TaskSpec,
 };
 use crate::error::WeaverError;
 use crate::observability::QueueCounts;
@@ -58,6 +58,9 @@ struct InMemoryQueueState {
     /// Scheduled queue (retry backoff).
     scheduled: BinaryHeap<ScheduledTask>,
 
+    /// Dependency graph for task dependencies.
+    dependency_graph: DependencyGraph,
+
     /// Next job ID to assign.
     next_job_id: u64,
 
@@ -80,6 +83,7 @@ impl InMemoryQueueState {
             attempts: HashMap::new(),
             decisions: Vec::new(),
             scheduled: BinaryHeap::new(),
+            dependency_graph: DependencyGraph::new(),
             next_job_id: 1,
             next_task_id: 1,
             next_attempt_id: 1,
@@ -219,18 +223,41 @@ impl Queue for InMemoryQueue {
                 let mut state = self.state.lock().await;
                 state.promote_scheduled_tasks();
 
-                if let Some(task_id) = state.ready.pop_front()
-                    && let Some(record) = state.records.get_mut(&task_id)
-                {
-                    record.start_attempt();
-                    let lease = InMemoryLease {
-                        task_id,
-                        envelope: record.envelope.clone(),
-                        queue: Arc::clone(&self.state),
-                        retry_policy: state.retry_policy.clone(),
-                        notify: Arc::clone(&self.notify),
-                    };
-                    return Some(Box::new(lease));
+                if let Some(task_id) = state.ready.pop_front() {
+                    // Phase 6/7: Check job state before leasing
+                    // First, get job_id from record (immutable borrow)
+                    let job_id = state.records.get(&task_id).and_then(|r| r.job_id);
+
+                    // Check job state if task belongs to a job
+                    if let Some(job_id) = job_id {
+                        if let Some(job) = state.get_job_mut(job_id) {
+                            // Phase 6: Check deadline
+                            if job.is_deadline_exceeded() {
+                                job.mark_stuck();
+                                // Skip this task and continue to next iteration
+                                continue;
+                            }
+
+                            // Phase 7.2: Skip tasks from cancelled jobs
+                            if job.state == crate::domain::JobState::Cancelled {
+                                // Skip this task and continue to next iteration
+                                continue;
+                            }
+                        }
+                    }
+
+                    // Job state OK, start task attempt
+                    if let Some(record) = state.records.get_mut(&task_id) {
+                        record.start_attempt();
+                        let lease = InMemoryLease {
+                            task_id,
+                            envelope: record.envelope.clone(),
+                            queue: Arc::clone(&self.state),
+                            retry_policy: state.retry_policy.clone(),
+                            notify: Arc::clone(&self.notify),
+                        };
+                        return Some(Box::new(lease));
+                    }
                 }
 
                 // No ready tasks - check if we have scheduled tasks
@@ -263,6 +290,110 @@ impl InMemoryQueue {
         };
         self.notify.notify_one();
         Ok(job_id)
+    }
+
+    /// Get job status by ID (Phase 7.1).
+    pub async fn get_status(&self, job_id: JobId) -> Result<JobStatus, WeaverError> {
+        let state = self.state.lock().await;
+
+        let job = state
+            .get_job(job_id)
+            .ok_or_else(|| WeaverError::Other(format!("Job {} not found", job_id)))?;
+
+        // Count tasks by state
+        let mut completed_tasks = 0;
+        let mut failed_tasks = 0;
+        let mut running_tasks = 0;
+
+        for task_id in &job.task_ids {
+            if let Some(record) = state.records.get(task_id) {
+                match record.state {
+                    TaskState::Succeeded => completed_tasks += 1,
+                    TaskState::Dead => failed_tasks += 1,
+                    TaskState::Running | TaskState::Queued | TaskState::RetryScheduled => {
+                        running_tasks += 1
+                    }
+                    TaskState::Decomposed => {} // Don't count decomposed tasks
+                }
+            }
+        }
+
+        // Convert Instant to milliseconds (elapsed since job creation)
+        let created_at_ms = job.created_at.elapsed().as_millis() as u64;
+        let updated_at_ms = job.updated_at.elapsed().as_millis() as u64;
+        let deadline_at_ms = job
+            .deadline_at
+            .map(|deadline| deadline.elapsed().as_millis() as u64);
+
+        Ok(JobStatus {
+            job_id,
+            state: JobStateView::from(job.state),
+            created_at_ms,
+            updated_at_ms,
+            deadline_at_ms,
+            total_tasks: job.task_ids.len(),
+            completed_tasks,
+            failed_tasks,
+            running_tasks,
+        })
+    }
+
+    /// Cancel a job by ID (Phase 7.2).
+    ///
+    /// v1: Simply marks the job as cancelled. Running tasks will continue
+    /// but new tasks from this job won't be leased.
+    pub async fn cancel_job(&self, job_id: JobId) -> Result<(), WeaverError> {
+        let mut state = self.state.lock().await;
+
+        let job = state
+            .get_job_mut(job_id)
+            .ok_or_else(|| WeaverError::Other(format!("Job {} not found", job_id)))?;
+
+        job.mark_cancelled();
+        Ok(())
+    }
+
+    /// Get job result with full execution history (Phase 7.3).
+    pub async fn get_result(&self, job_id: JobId) -> Result<JobResult, WeaverError> {
+        let state = self.state.lock().await;
+
+        let job = state
+            .get_job(job_id)
+            .ok_or_else(|| WeaverError::Other(format!("Job {} not found", job_id)))?;
+
+        // Collect all attempts for tasks in this job
+        let mut attempts = Vec::new();
+        for attempt_record in state.attempts.values() {
+            if job.task_ids.contains(&attempt_record.task_id) {
+                attempts.push(attempt_record.clone());
+            }
+        }
+
+        // Collect all decisions for tasks in this job
+        let mut decisions = Vec::new();
+        for decision_record in &state.decisions {
+            if job.task_ids.contains(&decision_record.task_id) {
+                decisions.push(decision_record.clone());
+            }
+        }
+
+        // Convert timestamps
+        let created_at_ms = job.created_at.elapsed().as_millis() as u64;
+        let updated_at_ms = job.updated_at.elapsed().as_millis() as u64;
+        let deadline_at_ms = job
+            .deadline_at
+            .map(|deadline| deadline.elapsed().as_millis() as u64);
+
+        Ok(JobResult {
+            job_id,
+            state: JobStateView::from(job.state),
+            created_at_ms,
+            updated_at_ms,
+            deadline_at_ms,
+            task_ids: job.task_ids.clone(),
+            attempts,
+            decisions,
+        })
     }
 
     /// Get attempt record by ID (for testing)
@@ -488,6 +619,23 @@ impl TaskLease for InMemoryLease {
         // Then, get mutable reference to record and update
         if let Some(record) = state.records.get_mut(&self.task_id) {
             record.mark_succeeded();
+        }
+
+        // Phase 5: Resolve dependencies for waiting tasks
+        let waiting_tasks = state.dependency_graph.get_waiting_tasks(self.task_id);
+        for waiting_task_id in waiting_tasks {
+            // Remove this dependency from the waiting task
+            if let Some(task) = state.records.get_mut(&waiting_task_id) {
+                task.remove_dependency(self.task_id);
+
+                // If the task has no more dependencies and is Queued, add to ready queue
+                if !task.has_dependencies() && task.state == TaskState::Queued {
+                    state.ready.push_back(waiting_task_id);
+                }
+            }
+
+            // Remove from dependency graph
+            state.dependency_graph.remove_dependency(waiting_task_id, self.task_id);
         }
 
         Ok(())
@@ -848,6 +996,189 @@ mod tests {
         assert!(decisions[0].context.is_some());
         let context = decisions[0].context.as_ref().unwrap();
         assert_eq!(context["delay_secs"], 10);
+    }
+
+    // Phase 5 tests: Dependency resolution
+
+    #[tokio::test]
+    async fn test_dependency_blocks_task_from_ready_queue() {
+        let queue = InMemoryQueue::new(RetryPolicy::default_v1());
+        let task_a_id = TaskId::new(100);
+        let task_b_id = TaskId::new(101);
+
+        {
+            let mut state = queue.state.lock().await;
+
+            // Create task A (no dependencies)
+            let envelope_a = TaskEnvelope::new(
+                task_a_id,
+                TaskType::new("task_a"),
+                serde_json::json!({"name": "A"}),
+            );
+            let record_a = TaskRecord::new(envelope_a, 5);
+            state.records.insert(task_a_id, record_a);
+            state.ready.push_back(task_a_id);
+
+            // Create task B with dependency on A
+            let envelope_b = TaskEnvelope::new(
+                task_b_id,
+                TaskType::new("task_b"),
+                serde_json::json!({"name": "B"}),
+            );
+            let mut record_b = TaskRecord::new(envelope_b, 5);
+            record_b.add_dependency(task_a_id);
+            state.records.insert(task_b_id, record_b);
+
+            // Register dependency in graph
+            state.dependency_graph.add_dependency(task_b_id, task_a_id);
+
+            // B should NOT be in ready queue (has dependencies)
+            assert_eq!(state.ready.len(), 1);
+            assert_eq!(state.ready.front(), Some(&task_a_id));
+        }
+
+        // Verify counts
+        let counts = queue.counts_by_state().await.unwrap();
+        assert_eq!(counts.queued, 2); // Both A and B are queued
+        assert_eq!(counts.running, 0);
+    }
+
+    #[tokio::test]
+    async fn test_dependency_resolution_on_task_completion() {
+        let queue = Arc::new(InMemoryQueue::new(RetryPolicy::default_v1()));
+        let task_a_id = TaskId::new(200);
+        let task_b_id = TaskId::new(201);
+
+        {
+            let mut state = queue.state.lock().await;
+
+            // Create task A
+            let envelope_a = TaskEnvelope::new(
+                task_a_id,
+                TaskType::new("task_a"),
+                serde_json::json!({"name": "A"}),
+            );
+            let record_a = TaskRecord::new(envelope_a, 5);
+            state.records.insert(task_a_id, record_a);
+            state.ready.push_back(task_a_id);
+
+            // Create task B with dependency on A
+            let envelope_b = TaskEnvelope::new(
+                task_b_id,
+                TaskType::new("task_b"),
+                serde_json::json!({"name": "B"}),
+            );
+            let mut record_b = TaskRecord::new(envelope_b, 5);
+            record_b.add_dependency(task_a_id);
+            state.records.insert(task_b_id, record_b);
+
+            // Register dependency in graph
+            state.dependency_graph.add_dependency(task_b_id, task_a_id);
+        }
+
+        queue.notify.notify_one();
+
+        // Lease task A (should be the only ready task)
+        let lease_a = queue.lease().await.unwrap();
+        assert_eq!(lease_a.envelope().task_id(), task_a_id);
+
+        // Complete task A (success)
+        lease_a.ack().await.unwrap();
+
+        // Now task B should be in ready queue
+        {
+            let state = queue.state.lock().await;
+            assert_eq!(state.ready.len(), 1);
+            assert_eq!(state.ready.front(), Some(&task_b_id));
+
+            // Verify B no longer has dependencies
+            let record_b = state.records.get(&task_b_id).unwrap();
+            assert!(!record_b.has_dependencies());
+        }
+
+        // Should be able to lease task B now
+        queue.notify.notify_one();
+        let lease_b = queue.lease().await.unwrap();
+        assert_eq!(lease_b.envelope().task_id(), task_b_id);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_dependencies() {
+        let queue = Arc::new(InMemoryQueue::new(RetryPolicy::default_v1()));
+        let task_a_id = TaskId::new(300);
+        let task_b_id = TaskId::new(301);
+        let task_c_id = TaskId::new(302);
+
+        {
+            let mut state = queue.state.lock().await;
+
+            // Create task A
+            let envelope_a = TaskEnvelope::new(
+                task_a_id,
+                TaskType::new("task_a"),
+                serde_json::json!({"name": "A"}),
+            );
+            state.records.insert(task_a_id, TaskRecord::new(envelope_a, 5));
+            state.ready.push_back(task_a_id);
+
+            // Create task B
+            let envelope_b = TaskEnvelope::new(
+                task_b_id,
+                TaskType::new("task_b"),
+                serde_json::json!({"name": "B"}),
+            );
+            state.records.insert(task_b_id, TaskRecord::new(envelope_b, 5));
+            state.ready.push_back(task_b_id);
+
+            // Create task C with dependencies on both A and B
+            let envelope_c = TaskEnvelope::new(
+                task_c_id,
+                TaskType::new("task_c"),
+                serde_json::json!({"name": "C"}),
+            );
+            let mut record_c = TaskRecord::new(envelope_c, 5);
+            record_c.add_dependency(task_a_id);
+            record_c.add_dependency(task_b_id);
+            state.records.insert(task_c_id, record_c);
+
+            // Register dependencies
+            state.dependency_graph.add_dependency(task_c_id, task_a_id);
+            state.dependency_graph.add_dependency(task_c_id, task_b_id);
+
+            // Only A and B should be ready
+            assert_eq!(state.ready.len(), 2);
+        }
+
+        queue.notify.notify_one();
+
+        // Complete task A
+        let lease_a = queue.lease().await.unwrap();
+        assert_eq!(lease_a.envelope().task_id(), task_a_id);
+        lease_a.ack().await.unwrap();
+
+        // C should still not be ready (still depends on B)
+        {
+            let state = queue.state.lock().await;
+            let record_c = state.records.get(&task_c_id).unwrap();
+            assert!(record_c.has_dependencies());
+            assert_eq!(record_c.depends_on.len(), 1);
+            assert_eq!(record_c.depends_on[0], task_b_id);
+        }
+
+        // Complete task B
+        queue.notify.notify_one();
+        let lease_b = queue.lease().await.unwrap();
+        assert_eq!(lease_b.envelope().task_id(), task_b_id);
+        lease_b.ack().await.unwrap();
+
+        // Now C should be ready
+        {
+            let state = queue.state.lock().await;
+            let record_c = state.records.get(&task_c_id).unwrap();
+            assert!(!record_c.has_dependencies());
+            assert_eq!(state.ready.len(), 1);
+            assert_eq!(state.ready.front(), Some(&task_c_id));
+        }
     }
 
     #[tokio::test]

@@ -2,8 +2,11 @@
 
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
+
 use crate::queue::TaskState;
 
+use super::attempt::{AttemptRecord, DecisionRecord};
 use super::ids::{JobId, TaskId};
 use super::spec::JobSpec;
 
@@ -21,6 +24,9 @@ pub enum JobState {
 
     /// Job was cancelled by user.
     Cancelled,
+
+    /// Job is stuck (deadline exceeded, dependency cycle, or no runnable tasks).
+    Stuck,
 }
 
 /// Job record: tracks a collection of tasks.
@@ -40,11 +46,18 @@ pub struct JobRecord {
     /// Timestamps for observability.
     pub created_at: Instant,
     pub updated_at: Instant,
+
+    /// Deadline for job completion (if specified in budget).
+    pub deadline_at: Option<Instant>,
 }
 
 impl JobRecord {
     pub fn new(job_id: JobId, spec: JobSpec) -> Self {
         let now = Instant::now();
+        let deadline_at = spec
+            .budget
+            .deadline_ms
+            .map(|ms| now + std::time::Duration::from_millis(ms));
         Self {
             job_id,
             spec,
@@ -52,6 +65,7 @@ impl JobRecord {
             task_ids: Vec::new(),
             created_at: now,
             updated_at: now,
+            deadline_at,
         }
     }
 
@@ -65,6 +79,21 @@ impl JobRecord {
     pub fn mark_cancelled(&mut self) {
         self.state = JobState::Cancelled;
         self.updated_at = Instant::now();
+    }
+
+    /// Mark job as stuck (deadline exceeded, dependency cycle, or no runnable tasks).
+    pub fn mark_stuck(&mut self) {
+        self.state = JobState::Stuck;
+        self.updated_at = Instant::now();
+    }
+
+    /// Check if job deadline has been exceeded.
+    pub fn is_deadline_exceeded(&self) -> bool {
+        if let Some(deadline) = self.deadline_at {
+            Instant::now() >= deadline
+        } else {
+            false
+        }
     }
 
     /// Update job state based on task states.
@@ -177,4 +206,64 @@ mod tests {
         job.update_state_from_tasks(&task_states);
         assert_eq!(job.state, JobState::Running);
     }
+}
+
+/// Job status for API responses.
+///
+/// This is a serializable view of a Job's current state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobStatus {
+    pub job_id: JobId,
+    pub state: JobStateView,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub deadline_at_ms: Option<u64>,
+    pub total_tasks: usize,
+    pub completed_tasks: usize,
+    pub failed_tasks: usize,
+    pub running_tasks: usize,
+}
+
+/// Serializable view of JobState.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStateView {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    Stuck,
+}
+
+impl From<JobState> for JobStateView {
+    fn from(state: JobState) -> Self {
+        match state {
+            JobState::Running => JobStateView::Running,
+            JobState::Completed => JobStateView::Completed,
+            JobState::Failed => JobStateView::Failed,
+            JobState::Cancelled => JobStateView::Cancelled,
+            JobState::Stuck => JobStateView::Stuck,
+        }
+    }
+}
+
+/// Job result for API responses (Phase 7.3).
+///
+/// Contains complete execution history.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobResult {
+    pub job_id: JobId,
+    pub state: JobStateView,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub deadline_at_ms: Option<u64>,
+
+    /// All task IDs belonging to this job.
+    pub task_ids: Vec<TaskId>,
+
+    /// All attempt records for tasks in this job.
+    pub attempts: Vec<AttemptRecord>,
+
+    /// All decision records for tasks in this job.
+    pub decisions: Vec<DecisionRecord>,
 }

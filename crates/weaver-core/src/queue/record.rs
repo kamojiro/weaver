@@ -37,6 +37,9 @@ pub struct TaskRecord {
     // Parent and child task relationships.
     pub parent_task_id: Option<TaskId>,
     pub child_task_ids: Vec<TaskId>,
+
+    // Task dependencies: this task cannot run until all tasks in this list are completed.
+    pub depends_on: Vec<TaskId>,
 }
 
 impl TaskRecord {
@@ -54,6 +57,7 @@ impl TaskRecord {
             updated_at: now,
             parent_task_id: None,
             child_task_ids: Vec::new(),
+            depends_on: Vec::new(),
         }
     }
 
@@ -75,6 +79,7 @@ impl TaskRecord {
             updated_at: Instant::now(),
             parent_task_id: Some(parent_task_id),
             child_task_ids: Vec::new(),
+            depends_on: Vec::new(),
         }
     }
 
@@ -118,5 +123,24 @@ impl TaskRecord {
         self.state = TaskState::Queued;
         self.next_run_at = None;
         self.updated_at = Instant::now();
+    }
+
+    /// Add a dependency: this task must wait for `task_id` to complete.
+    pub fn add_dependency(&mut self, task_id: TaskId) {
+        if !self.depends_on.contains(&task_id) {
+            self.depends_on.push(task_id);
+            self.updated_at = Instant::now();
+        }
+    }
+    
+    /// Remove a dependency (called when the depended task completes).
+    pub fn remove_dependency(&mut self, task_id: TaskId) {
+        self.depends_on.retain(|&id| id != task_id);
+        self.updated_at = Instant::now();
+    }
+    
+    /// Check if this task has any unresolved dependencies.
+    pub fn has_dependencies(&self) -> bool {
+        !self.depends_on.is_empty()
     }
 }
