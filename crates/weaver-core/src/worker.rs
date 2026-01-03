@@ -97,9 +97,22 @@ async fn worker_loop(
         match outcome_result {
             Ok(outcome) => match outcome.kind {
                 OutcomeKind::Success => {
-                    lease.ack().await.unwrap_or_else(|e| {
-                        eprintln!("[worker-{worker_id}] ack failed: {}", e);
-                    });
+                    // Check if Handler proposed decomposition (child_tasks present)
+                    if outcome.child_tasks.is_some() {
+                        // Go through Decider flow for decomposition
+                        let task_record = lease.get_task_record().await.unwrap_or_else(|e| {
+                            panic!("[worker-{worker_id}] get_task_record failed: {}", e);
+                        });
+                        let decision = decider.decide(&task_record, &outcome);
+                        lease.complete(outcome, decision).await.unwrap_or_else(|e| {
+                            eprintln!("[worker-{worker_id}] complete failed: {}", e);
+                        });
+                    } else {
+                        // Simple success, just ack
+                        lease.ack().await.unwrap_or_else(|e| {
+                            eprintln!("[worker-{worker_id}] ack failed: {}", e);
+                        });
+                    }
                 }
                 OutcomeKind::Failure | OutcomeKind::Blocked => {
                     let task_record = lease.get_task_record().await.unwrap_or_else(|e| {
@@ -119,6 +132,7 @@ async fn worker_loop(
                     reason: Some(handler_error.to_string()),
                     retry_hint: None,
                     alternatives: Vec::new(),
+                    child_tasks: None,
                 };
                 let decision = decider.decide(
                     &lease.get_task_record().await.unwrap_or_else(|e| {
@@ -138,11 +152,11 @@ async fn worker_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{DefaultDecider, Outcome, TaskEnvelope, TaskId, TaskType};
+    use crate::domain::{DefaultDecider, Outcome, TaskEnvelope, TaskId, TaskType, spec::{JobSpec, TaskSpec}};
     use crate::queue::{InMemoryQueue, RetryPolicy};
     use crate::runtime::{HandlerRegistry, TaskHandler};
     use async_trait::async_trait;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
     use tokio::time::{sleep, Duration};
 
     /// Test handler that fails N times before succeeding
@@ -339,5 +353,118 @@ mod tests {
         }
 
         panic!("Task did not complete successfully within timeout");
+    }
+
+    /// Test handler that decomposes on first execution, then succeeds on subsequent calls
+    struct DecomposingHandler {
+        decompose_on_first: AtomicBool,
+    }
+
+    impl DecomposingHandler {
+        fn new() -> Self {
+            Self {
+                decompose_on_first: AtomicBool::new(true),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl TaskHandler for DecomposingHandler {
+        async fn handle(&self, _envelope: &TaskEnvelope) -> Result<Outcome, crate::error::WeaverError> {
+            // First call: propose decomposition
+            if self.decompose_on_first.swap(false, Ordering::SeqCst) {
+                let child_specs = vec![
+                    TaskSpec::new(
+                        "child 1",
+                        TaskType::new("decomposing_task"),
+                        serde_json::json!({"child_index": 1}),
+                    ),
+                    TaskSpec::new(
+                        "child 2",
+                        TaskType::new("decomposing_task"),
+                        serde_json::json!({"child_index": 2}),
+                    ),
+                ];
+                return Ok(Outcome::success().with_decompose_hint(child_specs));
+            }
+
+            // Subsequent calls: succeed immediately
+            Ok(Outcome::success())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_task_decomposition_integration() {
+        use crate::domain::JobSpec;
+
+        // Setup: Queue, Runtime with DecomposingHandler, DefaultDecider, WorkerGroup
+        let queue = Arc::new(InMemoryQueue::new(RetryPolicy::default_v1()));
+
+        let mut registry = HandlerRegistry::new();
+        registry
+            .register(
+                TaskType::new("decomposing_task"),
+                Arc::new(DecomposingHandler::new()),
+            )
+            .unwrap();
+        let runtime = Arc::new(Runtime::new(Arc::new(registry)));
+
+        let decider = Arc::new(DefaultDecider::default_v1());
+
+        // Start 1 worker
+        let workers = WorkerGroup::spawn(1, queue.clone(), runtime.clone(), decider);
+
+        // Submit a job with one parent task
+        let job_spec = JobSpec::new(vec![TaskSpec::new(
+            "parent task",
+            TaskType::new("decomposing_task"),
+            serde_json::json!({}),
+        )]);
+        queue.submit_job(job_spec).await.unwrap();
+
+        // Wait for completion (parent decomposes into 2 children, all should succeed)
+        for _ in 0..50 {
+            // Max 5 seconds wait
+            let counts = queue.counts_by_state().await.unwrap();
+
+            // Success condition: 1 decomposed parent + 2 succeeded children
+            if counts.decomposed == 1 && counts.succeeded == 2 {
+                println!("✓ Decomposition test passed:");
+                println!("  - Parent: Decomposed (1)");
+                println!("  - Children: Succeeded (2)");
+                println!("  - Total tasks: {}", counts.decomposed + counts.succeeded);
+
+                // Verify decision records
+                let decisions = queue.get_decisions().await;
+                let decompose_decisions: Vec<_> = decisions
+                    .iter()
+                    .filter(|d| d.decision == "decompose")
+                    .collect();
+                assert_eq!(
+                    decompose_decisions.len(),
+                    1,
+                    "Should have exactly 1 decompose decision"
+                );
+
+                // Shutdown workers
+                workers.shutdown_and_join().await;
+                return;
+            }
+
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        // Timeout - print debug info
+        let counts = queue.counts_by_state().await.unwrap();
+        panic!(
+            "Decomposition test failed. Final counts: decomposed={}, succeeded={}, \
+             queued={}, running={}, retry_scheduled={}, dead={}",
+            counts.decomposed,
+            counts.succeeded,
+            counts.queued,
+            counts.running,
+            counts.retry_scheduled,
+            counts.dead
+        );
     }
 }

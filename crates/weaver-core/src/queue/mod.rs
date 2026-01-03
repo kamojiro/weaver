@@ -12,7 +12,7 @@ pub use state::TaskState;
 
 use async_trait::async_trait;
 
-use crate::domain::{Decision, Outcome, TaskEnvelope};
+use crate::domain::{Decision, Outcome, TaskEnvelope, TaskId, TaskSpec};
 use crate::error::WeaverError;
 
 /// A leased task for processing.
@@ -50,9 +50,11 @@ pub trait TaskLease: Send {
         decision: Decision,
     ) -> Result<(), WeaverError>;
 
+    /// call when add child tasks.
+    async fn add_child_tasks(&self, child_specs: Vec<TaskSpec>)
+    -> Result<Vec<TaskId>, WeaverError>;
+
     /// Mark success.
-    ///
-    /// Phase 4-1: Still used for SUCCESS outcomes (bypasses Decider).
     async fn ack(self: Box<Self>) -> Result<(), WeaverError>;
 
     /// Mark failure (queue decides retry/dead policy).

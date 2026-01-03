@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::TaskType;
+
 /// A Job is the unit of submission / cancellation / status / result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JobSpec {
@@ -26,13 +28,19 @@ impl JobSpec {
 
 /// A trackable unit inside a job.
 /// Tasks may be added during execution (decomposition, alternatives, etc.).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskSpec {
-    /// Human-readable title.
+    /// Human-readable title
     pub title: Option<String>,
 
     /// Human-readable intent / explanation.
     pub intent: Option<String>,
+
+    /// Task type (required for creating TaskEnvelope).
+    pub task_type: TaskType,
+
+    /// Task payload (required for creating TaskEnvelope).
+    pub payload: serde_json::Value,
 
     /// Goal/definition-of-done (domain-specific; keep flexible in v1).
     pub goal: Option<serde_json::Value>,
@@ -51,10 +59,16 @@ pub struct TaskSpec {
 
 impl TaskSpec {
     /// Convenience constructor for simple "one task" use cases.
-    pub fn new(title: impl Into<String>) -> Self {
+    pub fn new(
+        title: impl Into<String>,
+        task_type: TaskType,
+        payload: serde_json::Value,
+    ) -> Self {
         Self {
             title: Some(title.into()),
             intent: None,
+            task_type,
+            payload,
             goal: None,
             constraints: None,
             seed_action_hint: None,
@@ -104,8 +118,14 @@ mod tests {
 
     #[test]
     fn job_spec_roundtrip_json() {
+        use super::TaskType;
+
         let job = JobSpec {
-            tasks: vec![TaskSpec::new("hello")],
+            tasks: vec![TaskSpec::new(
+                "hello",
+                TaskType::new("test_task"),
+                serde_json::json!({}),
+            )],
             budget: Budget::default(),
         };
 
@@ -113,6 +133,7 @@ mod tests {
         let de: JobSpec = serde_json::from_str(&s).expect("deserialize");
         assert_eq!(de.tasks.len(), 1);
         assert_eq!(de.tasks[0].title.as_deref(), Some("hello"));
+        assert_eq!(de.tasks[0].task_type.as_str(), "test_task");
     }
 
     #[test]
@@ -120,7 +141,11 @@ mod tests {
       let json = r#"
       {
         "tasks": [
-          { "title": "hello" }
+          {
+            "title": "hello",
+            "task_type": "test_task",
+            "payload": {}
+          }
         ]
       }"#;
       let job: JobSpec = serde_json::from_str(json).expect("deserialize");

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 /// - Queued -> Running -> Succeeded
 /// - Queued -> Running -> RetryScheduled -> Queued (loop until max_attempts)
 /// - Queued -> Running -> Dead (when max_attempts exceeded)
+/// - Queued -> Running -> Decomposed (when task is decomposed into child tasks)
 ///
 /// Design note: Using an enum ensures exhaustive matching and prevents invalid states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -26,12 +27,18 @@ pub enum TaskState {
 
     /// Failed permanently (max_attempts exceeded).
     Dead,
+
+    /// Decomposed into child tasks (task completed its role).
+    Decomposed,
 }
 
 impl TaskState {
     /// Is this a terminal state (no further transitions)?
     pub fn is_terminal(self) -> bool {
-        matches!(self, TaskState::Succeeded | TaskState::Dead)
+        matches!(
+            self,
+            TaskState::Succeeded | TaskState::Decomposed | TaskState::Dead
+        )
     }
 
     /// Is this task runnable (eligible for lease)?

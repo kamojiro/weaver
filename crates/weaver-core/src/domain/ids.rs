@@ -37,6 +37,10 @@ impl fmt::Display for JobId {
 pub struct TaskId(u64);
 
 impl TaskId {
+    pub const fn as_u64(&self) -> u64 { self.0 }
+}
+
+impl TaskId {
     pub fn new(raw: u64) -> Self {
         Self(raw)
     }

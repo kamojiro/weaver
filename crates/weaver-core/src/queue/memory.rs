@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, Notify};
 use super::{RetryPolicy, TaskRecord, TaskState};
 use crate::domain::{
     Artifact, AttemptId, AttemptRecord, Decision, DecisionRecord, JobId, JobRecord, JobSpec,
-    Outcome, TaskEnvelope, TaskId,
+    Outcome, TaskEnvelope, TaskId, TaskSpec,
 };
 use crate::error::WeaverError;
 use crate::observability::QueueCounts;
@@ -135,6 +135,7 @@ impl InMemoryQueueState {
                 TaskState::Succeeded => counts.succeeded += 1,
                 TaskState::RetryScheduled => counts.retry_scheduled += 1,
                 TaskState::Dead => counts.dead += 1,
+                TaskState::Decomposed => counts.decomposed += 1,
             }
         }
         counts
@@ -164,13 +165,8 @@ impl InMemoryQueueState {
         let max_attempts = spec.budget.max_attempts_per_task;
         for task_spec in &spec.tasks {
             let task_id = self.allocate_task_id();
-            let task_type = task_spec
-                .title
-                .clone()
-                .unwrap_or_else(|| "generic".to_string());
-            let payload = serde_json::to_value(task_spec).unwrap_or(serde_json::json!({}));
             let envelope =
-                TaskEnvelope::new(task_id, crate::domain::TaskType::new(task_type), payload);
+                TaskEnvelope::new(task_id, task_spec.task_type.clone(), task_spec.payload.clone());
             let task_record = TaskRecord::new_with_job(envelope, max_attempts, job_id);
             self.records.insert(task_id, task_record);
             self.ready.push_back(task_id);
@@ -184,7 +180,7 @@ impl InMemoryQueueState {
 
 /// In-memory queue implementation.
 pub struct InMemoryQueue {
-    state: Arc<Mutex<InMemoryQueueState>>,
+    pub(crate) state: Arc<Mutex<InMemoryQueueState>>,
     notify: Arc<Notify>,
 }
 
@@ -381,12 +377,98 @@ impl TaskLease for InMemoryLease {
                 };
                 false
             }
+            Decision::Decompose {
+                child_tasks,
+                reason,
+            } => {
+                let child_ids = self.add_child_tasks(child_tasks).await?;
+                let decision_record = DecisionRecord::new(
+                    self.task_id,
+                    serde_json::json!({
+                        "attempt_id": attempt_record.attempt_id,
+                        "outcome": format!("{:?}", outcome.kind),
+                        "child_task_ids": child_ids.iter().map(|id| id.as_u64()).collect::<Vec<u64>>(),
+                    }),
+                    "decomposition".to_string(),
+                    "decompose".to_string(),
+                    Some(serde_json::json!({
+                        "reason": reason,
+                    })),
+                );
+                let mut state = self.queue.lock().await;
+
+                if let Some(record) = state.records.get_mut(&self.task_id) {
+                    record.state = TaskState::Decomposed;
+                    state.decisions.push(decision_record);
+                }
+                false
+            }
         };
 
         if should_notify {
             self.notify.notify_one();
         }
         Ok(())
+    }
+
+    async fn add_child_tasks(
+        &self,
+        child_specs: Vec<TaskSpec>,
+    ) -> Result<Vec<TaskId>, WeaverError> {
+        // Phase 1: Acquire lock, get parent info, allocate TaskIds
+        let (parent_job_id, max_attempts, task_ids) = {
+            let mut state = self.queue.lock().await;
+
+            let parent = state
+                .records
+                .get(&self.task_id)
+                .ok_or_else(|| WeaverError::Other("parent task not found".into()))?;
+
+            let parent_job_id = parent
+                .job_id
+                .ok_or_else(|| WeaverError::Other("parent task has no associated job".into()))?;
+
+            let max_attempts = parent.max_attempts;
+
+            // Pre-allocate all TaskIds while holding the lock
+            let task_ids: Vec<TaskId> = (0..child_specs.len())
+                .map(|_| state.allocate_task_id())
+                .collect();
+
+            (parent_job_id, max_attempts, task_ids)
+        }; // Lock is released here
+
+        // Phase 2: Create TaskRecords outside the lock (no I/O, but reduces lock contention)
+        let task_records: Vec<(TaskId, TaskRecord)> = child_specs
+            .into_iter()
+            .zip(task_ids.iter())
+            .map(|(spec, &task_id)| {
+                let envelope = TaskEnvelope::new(task_id, spec.task_type, spec.payload);
+                let record =
+                    TaskRecord::new_child(envelope, max_attempts, parent_job_id, self.task_id);
+                (task_id, record)
+            })
+            .collect();
+
+        // Phase 3: Re-acquire lock and insert all records
+        {
+            let mut state = self.queue.lock().await;
+
+            for (task_id, record) in task_records {
+                state.records.insert(task_id, record);
+                state.ready.push_back(task_id);
+            }
+
+            // Update parent's child_task_ids
+            if let Some(parent) = state.records.get_mut(&self.task_id) {
+                parent.child_task_ids = task_ids.clone();
+            }
+        } // Lock is released here
+
+        // Notify that new tasks are ready
+        self.notify.notify_one();
+
+        Ok(task_ids)
     }
 
     async fn ack(self: Box<Self>) -> Result<(), WeaverError> {
@@ -742,6 +824,7 @@ mod tests {
             artifacts: vec![Artifact::Stderr("error details".to_string())],
             retry_hint: None,
             alternatives: vec![],
+            child_tasks: None,
         };
 
         let decision = Decision::Retry {
@@ -765,5 +848,86 @@ mod tests {
         assert!(decisions[0].context.is_some());
         let context = decisions[0].context.as_ref().unwrap();
         assert_eq!(context["delay_secs"], 10);
+    }
+
+    #[tokio::test]
+    async fn test_add_child_tasks_creates_children_correctly() {
+        use crate::domain::{JobSpec, TaskType};
+
+        let queue = Arc::new(InMemoryQueue::new(RetryPolicy::default_v1()));
+
+        // Create and enqueue a parent task via Job (so it has job_id)
+        let job_spec = JobSpec::new(vec![TaskSpec::new(
+            "parent task",
+            TaskType::new("parent_task"),
+            serde_json::json!({"data": "parent"}),
+        )]);
+        queue.submit_job(job_spec).await.unwrap();
+
+        // Lease the parent task
+        let lease = queue.lease().await.unwrap();
+        assert_eq!(lease.envelope().task_id(), TaskId::new(1));
+
+        // Create child task specs
+        let child_specs = vec![
+            TaskSpec::new(
+                "child 1",
+                TaskType::new("child_task"),
+                serde_json::json!({"index": 1}),
+            ),
+            TaskSpec::new(
+                "child 2",
+                TaskType::new("child_task"),
+                serde_json::json!({"index": 2}),
+            ),
+        ];
+
+        // Add child tasks
+        let child_ids = lease.add_child_tasks(child_specs).await.unwrap();
+
+        // Verify 2 children were created
+        assert_eq!(child_ids.len(), 2);
+
+        // Verify child IDs are sequential
+        assert_eq!(child_ids[0], TaskId::new(2));
+        assert_eq!(child_ids[1], TaskId::new(3));
+
+        // Verify parent's child_task_ids were updated
+        let state = queue.state.lock().await;
+        let parent_record = state.records.get(&TaskId::new(1)).unwrap();
+        assert_eq!(parent_record.child_task_ids.len(), 2);
+        assert_eq!(parent_record.child_task_ids[0], TaskId::new(2));
+        assert_eq!(parent_record.child_task_ids[1], TaskId::new(3));
+
+        // Verify children have correct parent_task_id
+        let child1_record = state.records.get(&TaskId::new(2)).unwrap();
+        assert_eq!(child1_record.parent_task_id, Some(TaskId::new(1)));
+        assert_eq!(child1_record.envelope.task_type().as_str(), "child_task");
+        assert_eq!(child1_record.envelope.payload()["index"], 1);
+
+        let child2_record = state.records.get(&TaskId::new(3)).unwrap();
+        assert_eq!(child2_record.parent_task_id, Some(TaskId::new(1)));
+        assert_eq!(child2_record.envelope.task_type().as_str(), "child_task");
+        assert_eq!(child2_record.envelope.payload()["index"], 2);
+
+        // Verify children inherited job_id from parent
+        assert_eq!(child1_record.job_id, parent_record.job_id);
+        assert_eq!(child2_record.job_id, parent_record.job_id);
+
+        // Verify children inherited max_attempts from parent
+        assert_eq!(child1_record.max_attempts, parent_record.max_attempts);
+        assert_eq!(child2_record.max_attempts, parent_record.max_attempts);
+
+        // Verify children are in Ready state
+        assert_eq!(child1_record.state, TaskState::Queued);
+        assert_eq!(child2_record.state, TaskState::Queued);
+
+        // Drop lock before calling counts_by_state (which also needs the lock)
+        drop(state);
+
+        // Verify queue counts
+        let counts = queue.counts_by_state().await.unwrap();
+        assert_eq!(counts.queued, 2); // 2 children in ready queue
+        assert_eq!(counts.running, 1); // parent is running (leased)
     }
 }

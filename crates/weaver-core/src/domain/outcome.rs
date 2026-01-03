@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::spec::TaskSpec;
+
 /// A unified classification of an attempt result.
 ///
 /// We intentionally serialize as SCREAMING_SNAKE_CASE to match the requirement:
@@ -65,6 +67,9 @@ pub struct Outcome {
     /// Optional alternative actions/approaches (domain-specific).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alternatives: Vec<serde_json::Value>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_tasks: Option<Vec<TaskSpec>>,
 }
 
 impl Outcome {
@@ -75,6 +80,7 @@ impl Outcome {
             reason: None,
             retry_hint: None,
             alternatives: Vec::new(),
+            child_tasks: None,
         }
     }
 
@@ -85,6 +91,7 @@ impl Outcome {
             reason: Some(reason.into()),
             retry_hint: None,
             alternatives: Vec::new(),
+            child_tasks: None,
         }
     }
 
@@ -95,6 +102,7 @@ impl Outcome {
             reason: Some(reason.into()),
             retry_hint: None,
             alternatives: Vec::new(),
+            child_tasks: None,
         }
     }
 
@@ -110,6 +118,11 @@ impl Outcome {
 
     pub fn with_alternative(mut self, alternative: serde_json::Value) -> Self {
         self.alternatives.push(alternative);
+        self
+    }
+
+    pub fn with_decompose_hint(mut self, child_tasks: Vec<TaskSpec>) -> Self {
+        self.child_tasks = Some(child_tasks);
         self
     }
 }

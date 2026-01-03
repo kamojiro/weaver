@@ -5,23 +5,24 @@
 
 use std::time::Duration;
 
-use super::Outcome;
+use super::{Outcome, spec::TaskSpec};
 use crate::queue::{RetryPolicy, TaskRecord};
 
 /// The next action to take for a task.
 ///
 /// Phase 4-1: Minimal decision types (retry/stop only)
-/// Phase 4-2: Will add Decompose, AddDependency, etc.
+/// Phase 4: Adding Decompose for task decomposition
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decision {
     /// Retry the task after a delay.
-    Retry {
-        delay: Duration,
-        reason: String,
-    },
+    Retry { delay: Duration, reason: String },
 
     /// Mark the task as dead (give up).
-    MarkDead {
+    MarkDead { reason: String },
+
+    /// Decompose the task into child tasks.
+    Decompose {
+        child_tasks: Vec<TaskSpec>,
         reason: String,
     },
 }
@@ -73,8 +74,13 @@ impl DefaultDecider {
 }
 
 impl Decider for DefaultDecider {
-    fn decide(&self, task: &TaskRecord, _outcome: &Outcome) -> Decision {
-        if task.attempts >= task.max_attempts {
+    fn decide(&self, task: &TaskRecord, outcome: &Outcome) -> Decision {
+        if let Some(child_tasks) = &outcome.child_tasks {
+            Decision::Decompose {
+                child_tasks: child_tasks.clone(),
+                reason: "Decomposing task into child tasks".to_string(),
+            }
+        } else if task.attempts >= task.max_attempts {
             Decision::MarkDead {
                 reason: format!(
                     "Max attempts reached: {}/{}",

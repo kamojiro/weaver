@@ -7,4 +7,5 @@ pub struct QueueCounts {
     pub succeeded: usize,
     pub retry_scheduled: usize,
     pub dead: usize,
+    pub decomposed: usize,
 }

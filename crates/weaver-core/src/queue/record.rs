@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use super::TaskState;
-use crate::domain::{JobId, TaskEnvelope};
+use crate::domain::{JobId, TaskEnvelope, TaskId};
 
 /// Metadata + envelope for a task in the queue.
 ///
@@ -33,6 +33,10 @@ pub struct TaskRecord {
     /// Timestamps for observability.
     pub created_at: Instant,
     pub updated_at: Instant,
+
+    // Parent and child task relationships.
+    pub parent_task_id: Option<TaskId>,
+    pub child_task_ids: Vec<TaskId>,
 }
 
 impl TaskRecord {
@@ -48,6 +52,29 @@ impl TaskRecord {
             next_run_at: None,
             created_at: now,
             updated_at: now,
+            parent_task_id: None,
+            child_task_ids: Vec::new(),
+        }
+    }
+
+    pub fn new_child(
+        envelope: TaskEnvelope,
+        max_attempts: u32,
+        job_id: JobId,
+        parent_task_id: TaskId,
+    ) -> Self {
+        Self{
+            envelope,
+            state: TaskState::Queued,
+            job_id: Some(job_id),
+            attempts: 0,
+            max_attempts,
+            last_error: None,
+            next_run_at: None,
+            created_at: Instant::now(),
+            updated_at: Instant::now(),
+            parent_task_id: Some(parent_task_id),
+            child_task_ids: Vec::new(),
         }
     }
 
