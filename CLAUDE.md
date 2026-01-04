@@ -13,7 +13,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Support cancellation and status queries during execution
 - Designed for learning Rust async patterns, ownership/lifetimes, and functional programming concepts
 
-This is a **v1 implementation** focused on single-process execution with in-memory state.
+---
+
+## 🔄 Project Status: v1 → v2 Migration
+
+**v1 (COMPLETED)**: Single-process, in-memory learning prototype
+- **Purpose**: Learn Rust fundamentals (async, ownership, functional patterns)
+- **Status**: Phase 1-4 complete (basic execution through task decomposition)
+- **Archive**: See `dev/learning/tasks_v1/`
+
+**v2 (CURRENT)**: Production-ready distributed task execution system
+- **Purpose**: Build a real-world task orchestration engine
+- **Architecture**: PostgreSQL (source of truth) + Redis (delivery) + Blob storage
+- **Key Patterns**: Outbox pattern, Lease-based execution, Ports & Adapters
+- **Timeline**: ~2 weeks (14 PRs across 2 phases)
+- **Tasks**: See `dev/learning/tasks.md`
+
+**What's Different in v2:**
+- **PostgreSQL as source of truth**: All state, history, dependencies, and outbox events
+- **Redis for delivery**: Task IDs only (no state/payload in Redis)
+- **Typed Task API**: Compile-time task_type validation with runtime registration check
+- **Outbox pattern**: Transactional consistency between state changes and delivery
+- **Lease-based execution**: At-least-once delivery with visibility timeout
+- **Artifact management**: Blob storage (MinIO/S3/Local) with TTL and GC
+- **Repair/Regenerate**: Automatic recovery from decode failures
 
 ## Learning Mode (CRITICAL)
 
@@ -34,8 +57,10 @@ This is a **v1 implementation** focused on single-process execution with in-memo
 - Technical discussions and explanations should be in Japanese
 
 **Learning task management:**
-- `dev/learning/tasks.md` - Master task list for all phases (check here for what needs to be done)
-- `dev/learning/learning_YYYY_MM_DD.md` - Daily implementation logs (detailed records with code and insights)
+- `dev/learning/tasks.md` - **v2** master task list (14 PRs, Week 1-2)
+- `dev/learning/tasks_v1/tasks.md` - v1 task archive (completed)
+- `dev/learning/learning_YYYY_MM_DD.md` - Daily implementation logs (v2)
+- `dev/learning/tasks_v1/learning_YYYY_MM_DD.md` - v1 implementation logs (archive)
 - `dev/learning/README.md` - Usage guide for the learning directory
 
 **IMPORTANT for Claude Code:**
@@ -110,12 +135,43 @@ When implementing new features, these constraints are **MANDATORY**:
 - **Algebraic data types**: Use enums with exhaustive `match` to prevent logic gaps
 - **Result/Option composition**: Prefer `map`/`and_then`/`fold` over imperative error handling
 
-### 3. V1 Boundaries
-1. **Single-process only**: No distributed coordination yet
-2. **In-memory state**: Persistence will be pluggable later
-3. **Replaceable execution**: Queue/Worker/Scheduler mechanisms should be swappable
-4. **Status & Cancel**: Must support `get_status()` and `cancel_job()` operations
-5. **No infinite loops**: All retry/backoff must respect budgets (max attempts, deadlines)
+### 3. V2 Design Invariants
+
+**MUST maintain these invariants in v2 implementation:**
+
+1. **PostgreSQL is source of truth**
+   - Redis is for delivery only (task_id + lightweight meta)
+   - Never store state/payload/envelope in Redis
+   - All state must be reconstructible from PostgreSQL
+
+2. **Lease authority is in PostgreSQL**
+   - Redis pop is just a "candidate notification"
+   - Execution authority is determined by `TaskStore.claim()` success only
+
+3. **Outbox pattern is mandatory**
+   - When a task becomes `ready`, MUST append `dispatch_task` to outbox in same TX
+   - Never allow "ready but not dispatched" state (prevents lost tasks)
+
+4. **Payload via artifact_ref**
+   - No large data embedded in PG/Redis
+   - Enforce size limits, force artifact storage for oversized payloads
+   - Support TTL (expires_at) for automatic cleanup
+
+5. **Dependencies fixed at creation**
+   - v2: Dependencies are established at task creation time
+   - No adding dependencies after task execution starts (or strong constraints if needed)
+   - Simplifies `remaining_deps` ready-check logic
+
+6. **Transaction boundaries are sacred**
+   - State transitions (claim/complete/reap) + outbox generation happen in TaskStore TX
+   - App layer never directly mutates state, only calls ports
+
+**v1 Boundaries (archived for reference):**
+1. ~~Single-process only~~ → v2: Distributed (PG/Redis/Workers)
+2. ~~In-memory state~~ → v2: PostgreSQL persistence
+3. ✅ Replaceable execution (still true: Queue/Worker swappable via ports)
+4. ✅ Status & Cancel support (carried forward to v2)
+5. ✅ No infinite loops (v2 adds max_repairs for decode failures)
 
 ## Documentation References
 
@@ -123,7 +179,18 @@ When implementing new features, these constraints are **MANDATORY**:
 
 **Important**: Requirements are stored with date prefixes (YYYY_MM_DD). **Always use the file with the newest date** as the current authoritative specification.
 
-**Current (Latest): `dev/docs/requirements/2025_12_27_weaver_requirements.md`**
+**Current (Latest): `dev/docs/requirements/2026_01_03_weaver_requirements.md` (v2)**
+- PostgreSQL as source of truth + Outbox pattern
+- Redis delivery queue (task_id only)
+- Typed Task API with startup validation
+- Lease + visibility timeout (at-least-once delivery)
+- Decode failure recovery (repair tasks + max_repairs)
+- Artifact storage with TTL and GC
+- Docker Compose full-stack deployment
+- 2-week implementation plan (14 PRs)
+- Module structure: domain / ports / app / typed / impls
+
+**Historical: `dev/docs/requirements/2025_12_27_weaver_requirements.md` (v1)**
 - Job-level abstraction (multiple tasks per job)
 - Decision/Attempt/Artifact model
 - Automatic decomposition and dependency discovery
