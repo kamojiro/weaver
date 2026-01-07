@@ -26,6 +26,6 @@ pub use self::artifact_store::ArtifactStore;
 pub use self::decider::Decider;
 pub use self::dispatch::DispatchStrategy;
 pub use self::repair_hint::RepairHintGenerator;
-pub use self::clock::Clock;
-pub use self::id_generator::IdGenerator;
+pub use self::clock::{Clock, SystemClock, FixedClock};
+pub use self::id_generator::{IdGenerator, UlidGenerator};
 pub use self::event_sink::EventSink;

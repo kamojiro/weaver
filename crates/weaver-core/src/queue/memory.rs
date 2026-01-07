@@ -93,20 +93,20 @@ impl InMemoryQueueState {
 
     /// Allocate a new JobId.
     fn allocate_job_id(&mut self) -> JobId {
-        let id = JobId::new(self.next_job_id);
+        let id = JobId::new(self.next_job_id as u128);
         self.next_job_id += 1;
         id
     }
 
     /// Allocate a new TaskId.
     fn allocate_task_id(&mut self) -> TaskId {
-        let id = TaskId::new(self.next_task_id);
+        let id = TaskId::new(self.next_task_id as u128);
         self.next_task_id += 1;
         id
     }
 
     fn allocate_attempt_id(&mut self) -> AttemptId {
-        let id = AttemptId::new(self.next_attempt_id);
+        let id = AttemptId::new(self.next_attempt_id as u128);
         self.next_attempt_id += 1;
         id
     }

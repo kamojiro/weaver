@@ -1,11 +1,20 @@
 //! Task trait - 型付き Task の定義
 //!
 //! # 実装予定
-//! - **PR-3**: Task trait の実装
+//! - **PR-3**: Task trait の実装（TODO(human)）
+//!
+//! # 学習ポイント
+//! - Associated Constants (`const TYPE`)
+//! - Trait bounds の組み合わせ (Serialize + DeserializeOwned + Send + Sync + 'static)
+
+use std::collections::HashMap;
+
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 /// Task は task_type と型を対応付ける
 ///
-/// # 使用例（予定）
+/// # 使用例
 /// ```ignore
 /// #[derive(Serialize, Deserialize)]
 /// struct MyTask {
@@ -16,13 +25,38 @@
 ///     const TYPE: &'static str = "my_namespace.my_task.v1";
 /// }
 /// ```
-pub trait Task {
+///
+/// # Trait Bounds
+/// - `Serialize`: artifact への保存のため
+/// - `DeserializeOwned`: artifact からの復元のため（'static に対応）
+/// - `Send + Sync`: 複数スレッドから安全に使えるため
+/// - `'static`: Arc に格納できるため（参照を持たない）
+pub trait Task: Serialize + DeserializeOwned + Send + Sync + 'static {
     /// task_type の定義
     ///
     /// # 命名規約
     /// - `{namespace}.{domain}.{action}.v{major}`
     /// - 例: `acme.billing.charge.v1`
     const TYPE: &'static str;
+}
 
-    // TODO(PR-3): 追加のメソッド（必要に応じて）
+// 一時的にテスト用の Task 型をいくつか定義します。
+// 将来的には、これらは別のテストモジュールに移動する予定です。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestTask {
+    pub value: i32,
+}
+
+impl Task for TestTask {
+    const TYPE: &'static str = "test.task.create.v1";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnotherTestTask{
+    pub name: String,
+    pub family: HashMap<String, String>,
+}
+
+impl Task for AnotherTestTask {
+    const TYPE: &'static str = "test.task.another.v1";
 }

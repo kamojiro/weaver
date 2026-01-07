@@ -45,11 +45,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **For Claude Code:**
 - The user is actively learning Rust, async patterns, and functional programming
 - **Do NOT automatically implement features** unless explicitly requested
-- **Instead, provide:**
-  - Implementation hints and guidance
+- **CRITICAL: Let the user implement code themselves**
+  - **Default behavior**: Provide TODO(human) and "Learn by Doing" requests, then WAIT for user implementation
+  - **Sample implementations are OPTIONAL**: Provide sample/example implementations (1 out of 3 similar items) only when helpful for demonstration; otherwise, skip and let user implement all parts
+  - **Only implement directly when**: User explicitly requests "please implement this" or "do this for me"
+- **Instead of implementing, provide:**
+  - Clear task descriptions and requirements
   - TODO(human) markers in code for learning opportunities
   - "Learn by Doing" format requests for key implementation tasks
+  - (Optional) Sample implementation if it helps clarify the pattern
   - Code reviews and explanations after user implements features
+
+- **CRITICAL: TODO(human) comments in source code**
+  - **DO NOT write complete implementations in TODO comments** - this defeats the learning purpose
+  - **Instead, write hints and guidance:**
+    - What the code should accomplish (purpose)
+    - Key considerations or constraints
+    - Suggested approach or pattern name
+    - References to learning docs for full examples
+  - **Complete implementations belong in:**
+    - `dev/learning/learning_YYYY_MM_DD.md` (detailed hints in collapsible sections)
+    - NOT in source code comments
 
 **Language Preference:**
 - **日本語で回答・解説する**: ユーザーは日本語話者なので、説明、ヒント、コードレビューは日本語で提供すること

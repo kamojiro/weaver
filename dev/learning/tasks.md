@@ -55,18 +55,18 @@ v2 が完成したと言えるための条件：
 
 **ゴール**: PG/Redis なしでも動く骨格と、型安全な Task API の完成
 
-### PR-1: Module Tree 移行 ⏳ 未着手
+### PR-1: Module Tree 移行 ✅ 完了 (2026-01-04)
 
 **目的**: v2 のアーキテクチャに合わせた module 構成に再編成する
 
-- [ ] weaver-core の module tree を v2 仕様に再構成
-  - [ ] `domain/` モジュール（ids, task_type, envelope, budget, outcome, decision, state, errors, events）
-  - [ ] `ports/` モジュール（task_store, delivery_queue, artifact_store, decider, dispatch, repair_hint, clock, id_generator, event_sink）
-  - [ ] `app/` モジュール（builder, runtime, worker_loop, publisher_loop, reaper_loop, gc_loop, status）
-  - [ ] `typed/` モジュール（task, handler, registry, codec）
-  - [ ] `impls/` モジュール（inmem_delivery）
-- [ ] v1 のコードとの互換性を一時的に維持（段階的移行）
-- [ ] ビルドが通ることを確認（`cargo check`）
+- [x] weaver-core の module tree を v2 仕様に再構成
+  - [x] `domain/` モジュール（ids, task_type, envelope, budget, outcome, decision, state, errors, events）
+  - [x] `ports/` モジュール（task_store, delivery_queue, artifact_store, decider, dispatch, repair_hint, clock, id_generator, event_sink）
+  - [x] `app/` モジュール（builder, runtime, worker_loop, publisher_loop, reaper_loop, gc_loop, status）
+  - [x] `typed/` モジュール（task, handler, registry, codec）
+  - [x] `impls/` モジュール（inmem_delivery）
+- [x] v1 のコードは deprecated でマーク（v2 に集中）
+- [x] ビルドが通ることを確認（`cargo check`）
 
 **学習ポイント**:
 - Rust のモジュールシステム（pub mod, pub use）
@@ -77,22 +77,23 @@ v2 が完成したと言えるための条件：
 
 ---
 
-### PR-2: ULID Newtypes + IdGenerator/Clock ⏳ 未着手
+### PR-2: ULID Newtypes + IdGenerator/Clock ✅ 完了 (2026-01-04)
 
 **目的**: 分散システムで使える ID 生成と時刻抽象化
 
-- [ ] ULID newtypes の実装（JobId, TaskId, AttemptId, etc.）
-  - [ ] ulid クレート導入
-  - [ ] newtype パターンで型安全性確保
-  - [ ] Serialize/Deserialize 実装
-- [ ] IdGenerator trait の定義
-  - [ ] generate_job_id(), generate_task_id() など
-  - [ ] UlidGenerator 実装（デフォルト）
-- [ ] Clock trait の定義
-  - [ ] now() メソッド
-  - [ ] SystemClock 実装（デフォルト）
-  - [ ] FixedClock 実装（テスト用）
-- [ ] テスト作成（ULID の単調増加性など）
+- [x] ULID newtypes の実装（JobId, TaskId, AttemptId, etc.）
+  - [x] ulid, chrono, rand クレート導入
+  - [x] Phantom Type パターンで `Id<T>` を実装（コード重複削減）
+  - [x] Serialize/Deserialize 実装
+- [x] IdGenerator trait の定義
+  - [x] generate_job_id(), generate_task_id() など
+  - [x] UlidGenerator 実装（Clock 依存）
+- [x] Clock trait の定義
+  - [x] now() メソッド
+  - [x] SystemClock 実装（本番用）
+  - [x] FixedClock 実装（テスト用）
+- [x] テスト作成（ULID の単調増加性、PhantomData のゼロコストなど）
+- [x] v1 互換 API を削除（v2 に集中）
 
 **学習ポイント**:
 - ULID の特性（時刻ソート可能、分散生成可能）
@@ -103,35 +104,40 @@ v2 が完成したと言えるための条件：
 
 ---
 
-### PR-3: Typed Task API（Task/Handler/TypedRegistry/DynHandler） ⏳ 未着手
+### PR-3: Typed Task API（Task/Handler/TypedRegistry/DynHandler） ✅ 完了 (2026-01-07)
 
 **目的**: task_type の typo を型で排除し、Handler との対応付けを静的に保証
 
-- [ ] Task trait の定義
-  - [ ] `const TYPE: &'static str;` 定義
-  - [ ] task_type と型の対応付け
-- [ ] Handler trait の定義
-  - [ ] `async fn handle(&self, task: T) -> Result<Outcome, WeaverError>`
-  - [ ] ジェネリクスで Task と Handler を結びつける
-- [ ] TypedRegistry の実装
-  - [ ] `register::<T: Task>(handler: impl Handler<T>)` メソッド
-  - [ ] 内部的に DynHandler に変換
-  - [ ] HashMap<String, Arc<dyn DynHandler>> で管理
-- [ ] DynHandler trait の実装
-  - [ ] object-safe な trait（deserialize + handle）
-  - [ ] TypedHandler<T> → DynHandler adapter
-- [ ] PayloadCodec の実装
-  - [ ] artifact → T のデシリアライズ
-  - [ ] T → artifact のシリアライズ
-- [ ] テスト作成（型安全性の確認）
+- [x] Task trait の定義
+  - [x] `const TYPE: &'static str;` 定義
+  - [x] task_type と型の対応付け
+- [x] Handler trait の定義
+  - [x] `async fn handle(&self, task: T) -> Result<Outcome, WeaverError>`
+  - [x] ジェネリクスで Task と Handler を結びつける
+- [x] TypedRegistry の実装
+  - [x] `register::<T: Task>(handler: impl Handler<T>)` メソッド
+  - [x] 内部的に DynHandler に変換
+  - [x] HashMap<String, Arc<dyn DynHandler>> で管理
+- [x] DynHandler trait の実装
+  - [x] object-safe な trait（deserialize + handle）
+  - [x] TypedHandler<T> → DynHandler adapter
+- [x] PayloadCodec の実装
+  - [x] serde_json::Value → T のデシリアライズ
+  - [x] T → serde_json::Value のシリアライズ
+- [x] テスト作成（型安全性の確認）
+  - [x] registry: 4 tests
+  - [x] codec: 2 tests
+  - [x] handler: 1 test
+- [x] v1 コードとの互換性対応（Id::new() の追加）
 
 **学習ポイント**:
 - Rust の const generic / associated constants
 - Trait object と object safety
 - Type erasure パターン（Typed → Dyn）
 - ジェネリクスと型パラメータ
+- Arc による共有所有権
 
-**参考**: 要件ドキュメント 5章「型付き Task API（二層）」
+**参考**: 要件ドキュメント 5章「型付き Task API（二層）」、学習ログ `learning_2026_01_06.md`, `learning_2026_01_07.md`
 
 ---
 

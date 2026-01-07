@@ -18,5 +18,6 @@
   },
   "search.exclude": {
     "**/target/**": true
-  }
+  },
+  "editor.inlineSuggest.minShowDelay": 2000
 }

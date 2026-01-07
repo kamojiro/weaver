@@ -4,6 +4,7 @@
 //!
 //! # 含まれる実装
 //! - **InMemoryDeliveryQueue**: 開発用の配送キュー
+//! - **DirectDispatch**: v2 デフォルトの DispatchStrategy
 //! - （将来）InMemoryTaskStore: テスト用の正本
 //!
 //! # 本番用実装
@@ -13,6 +14,9 @@
 //! - `weaver-blob`: MinIO/S3/LocalArtifactStore
 
 pub mod inmem_delivery;
+pub mod dispatch;
 
 // 主要な型を再エクスポート
 pub use self::inmem_delivery::InMemoryDeliveryQueue;
+// TODO(human): DirectDispatch の実装後、以下のコメントを解除してください
+// pub use self::dispatch::DirectDispatch;

@@ -5,8 +5,11 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1.89"
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
 rstest = "0.26.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.147"
 thiserror = "2.0.17"
 tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "time", "sync"] }
+ulid = { version = "1.1", features = ["serde"] }
