@@ -21,7 +21,7 @@ pub mod event_sink;
 
 // 主要な trait を再エクスポート
 pub use self::task_store::TaskStore;
-pub use self::delivery_queue::DeliveryQueue;
+pub use self::delivery_queue::{DeliveryQueue, QueueError};
 pub use self::artifact_store::ArtifactStore;
 pub use self::decider::Decider;
 pub use self::dispatch::DispatchStrategy;

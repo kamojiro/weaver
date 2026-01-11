@@ -1,8 +1,5 @@
 //! PayloadCodec - serde_json::Value と Task の相互変換
 //!
-//! # 実装予定
-//! - **PR-3**: PayloadCodec の実装（TODO(human)）
-//!
 //! # 学習ポイント
 //! - serde_json::Value の扱い
 //! - Generic functions での型変換

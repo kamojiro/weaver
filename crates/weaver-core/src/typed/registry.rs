@@ -1,8 +1,5 @@
 //! TypedRegistry - Handler の登録と管理
 //!
-//! # 実装予定
-//! - **PR-3**: TypedRegistry の実装（TODO(human)）
-//!
 //! # 学習ポイント
 //! - HashMap での型消去された trait object の管理
 //! - Generic methods での登録と型安全性
@@ -37,13 +34,6 @@ pub struct TypedRegistry {
 /// RegistryError は TypedRegistry の操作エラー
 #[derive(Debug, thiserror::Error)]
 pub enum RegistryError {
-    // ────────────────────────────────────────────────────────────────────────
-    // TODO(human): エラー variant を定義してください
-    // ────────────────────────────────────────────────────────────────────────
-    //
-    // ヒント: 二重登録エラーと未登録エラーの 2 つの variant を定義
-    // thiserror の #[error(...)] attribute でエラーメッセージを設定
-    //
     #[error("Handler for task type '{0}' is already registered")]
     AlreadyRegistered(String),
 }
@@ -76,19 +66,6 @@ impl TypedRegistry {
         self.handlers.keys().cloned().collect()
     }
 }
-
-// ────────────────────────────────────────────────────────────────────────────
-// TODO(human): テストを追加してください
-// ────────────────────────────────────────────────────────────────────────────
-//
-// テストすべき内容:
-// 1. register() → get() のラウンドトリップ
-// 2. 二重登録が RegistryError::AlreadyRegistered になること
-// 3. registered_types() が登録済みの task_type を返すこと
-// 4. 異なる Task 型（TestTask, AnotherTestTask）が混同できないこと
-//
-// #[cfg(test)] mod tests { ... } ブロックを作成してください
-//
 
 #[cfg(test)]
 mod tests {

@@ -6,6 +6,7 @@
     "words": [
         "chrono",
         "clippy",
+        "Condvar",
         "Deque",
         "newtype",
         "repr",

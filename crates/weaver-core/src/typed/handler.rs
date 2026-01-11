@@ -1,8 +1,5 @@
 //! Handler trait - Task を実行する Handler の定義
 //!
-//! # 実装予定
-//! - **PR-3**: Handler trait と DynHandler trait の実装（TODO(human)）
-//!
 //! # 学習ポイント
 //! - ジェネリック trait (Handler<T>)
 //! - Object-safe trait (DynHandler)

@@ -1,8 +1,5 @@
 //! Task trait - 型付き Task の定義
 //!
-//! # 実装予定
-//! - **PR-3**: Task trait の実装（TODO(human)）
-//!
 //! # 学習ポイント
 //! - Associated Constants (`const TYPE`)
 //! - Trait bounds の組み合わせ (Serialize + DeserializeOwned + Send + Sync + 'static)

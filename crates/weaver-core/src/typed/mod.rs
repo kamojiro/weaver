@@ -6,9 +6,6 @@
 //! # 二層構造
 //! - **表層（Typed）**: `Task` trait, `Handler<T>` trait - 型安全
 //! - **内部（Dyn）**: `DynHandler` trait - object-safe, type erasure
-//!
-//! # 実装予定
-//! - **PR-3**: Typed Task API の実装（TODO(human)）
 
 pub mod task;
 pub mod handler;

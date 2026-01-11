@@ -11,7 +11,7 @@
 
 ### v2 実装計画（2週間）
 
-- ⏳ Week 1: 骨格と Typed API（正しさの土台）
+- ✅ **Week 1: 骨格と Typed API（正しさの土台）** ← 完了！(2026-01-11)
 - ⏳ Week 2: PG正本 + outbox + Redis配送 + Blob/TTL + repair
 
 ### 完了条件（v2 DoD）
@@ -141,72 +141,98 @@ v2 が完成したと言えるための条件：
 
 ---
 
-### PR-4: DispatchStrategy（trait）+ DirectDispatch ⏳ 未着手
+### PR-4: DispatchStrategy（trait）+ DirectDispatch ✅ 完了 (2026-01-11)
 
 **目的**: 将来の拡張（Rule/Agent dispatch）に備えた抽象化
 
-- [ ] DispatchStrategy trait の定義
-  - [ ] `fn select_handler(&self, task_type: &str, meta: &TaskMeta) -> Result<String, DispatchError>`
-  - [ ] task_type → handler_id の解決
-- [ ] DirectDispatch 実装
-  - [ ] 1:1 マッピング（task_type == handler_id）
-  - [ ] v2 のデフォルト実装
-- [ ] App への統合
+- [x] DispatchStrategy trait の定義
+  - [x] `fn select_handler(&self, task_type: &str) -> Result<String, WeaverError>`
+  - [x] task_type → handler_id の解決
+- [x] DirectDispatch 実装
+  - [x] 1:1 マッピング（task_type == handler_id）
+  - [x] v2 のデフォルト実装
+  - [x] Zero-sized type（メモリコスト 0）
+- [x] impls モジュールの整備
+  - [x] impls/dispatch.rs の作成
+  - [x] DirectDispatch の re-export
+- [x] テスト作成（DirectDispatch の動作確認）
+- [ ] App への統合（PR-5 以降で対応予定）
   - [ ] AppBuilder で strategy を差し替え可能に
   - [ ] Runtime での利用
-- [ ] テスト作成（DirectDispatch の動作確認）
 
 **学習ポイント**:
 - Strategy パターン
 - Trait による振る舞いの差し替え
+- Object-safe な trait 設計
+- Zero-sized type の活用
 - 将来の拡張性を考えた設計
 
-**参考**: 要件ドキュメント 6章「DispatchStrategy」
+**参考**: 要件ドキュメント 6章「DispatchStrategy」、学習ログ `learning_2026_01_11.md`
 
 ---
 
-### PR-5: 起動時検証（expect_tasks） ⏳ 未着手
+### PR-5: 起動時検証（expect_tasks） ✅ 完了 (2026-01-11)
 
 **目的**: 登録漏れを起動時に検知し、fail-fast
 
-- [ ] AppBuilder::expect_tasks() メソッド
-  - [ ] 期待される task_type のリストを受け取る
-  - [ ] build() 時に「期待集合 ⊆ 登録済み集合」をチェック
-  - [ ] 不足があれば panic または Error
-- [ ] テスト作成
-  - [ ] 登録漏れの検出テスト
-  - [ ] 正常系テスト
-- [ ] エラーメッセージの改善
-  - [ ] 不足している task_type を列挙
+- [x] AppBuilder::expect_tasks() メソッド
+  - [x] 期待される task_type のリストを受け取る
+  - [x] build() 時に「期待集合 ⊆ 登録済み集合」をチェック
+  - [x] 不足があれば BuildError::MissingTaskTypes を返す
+- [x] build() メソッド
+  - [x] 検証ロジックの実装
+  - [x] filter() による不足分の収集
+  - [x] expected_tasks が None の場合は検証スキップ
+- [x] テスト作成
+  - [x] 登録漏れの検出テスト (test_build_missing_task_types)
+  - [x] 正常系テスト (test_build_success)
+  - [x] エッジケーステスト (test_build_no_expect_tasks)
+- [x] エラーメッセージの改善
+  - [x] 不足している task_type を列挙
 
 **学習ポイント**:
 - Builder パターンでの検証ロジック
 - Fail-fast 設計
 - 開発体験の改善（明確なエラーメッセージ）
+- filter() と collect() による集合演算
+- matches! マクロによる高度なテスト
 
-**参考**: 要件ドキュメント 5.3 節「起動時検証」
+**参考**: 要件ドキュメント 5.3 節「起動時検証」、学習ログ `learning_2026_01_11.md`
 
 ---
 
-### PR-6: InMemoryDeliveryQueue（開発用） ⏳ 未着手
+### PR-6: InMemoryDeliveryQueue（開発用） ✅ 完了 (2026-01-11)
 
 **目的**: PG/Redis なしで動作確認できる開発用キュー
 
-- [ ] DeliveryQueue trait の定義
-  - [ ] `async fn push(&self, ns: &str, task_id: TaskId) -> Result<(), QueueError>`
-  - [ ] `async fn pop(&self, ns: &str, timeout: Duration) -> Result<Option<TaskId>, QueueError>`
-- [ ] InMemoryDeliveryQueue 実装
-  - [ ] VecDeque + Mutex/RwLock での実装
-  - [ ] namespace 対応
-  - [ ] blocking pop（timeout 付き）
-- [ ] テスト作成（push/pop の動作確認）
+- [x] DeliveryQueue trait の定義
+  - [x] `async fn push(&self, ns: &str, task_id: TaskId) -> Result<(), QueueError>`
+  - [x] `async fn pop(&self, ns: &str, timeout: Duration) -> Result<Option<TaskId>, QueueError>`
+- [x] InMemoryDeliveryQueue 実装
+  - [x] VecDeque + Mutex/Condvar での実装
+  - [x] namespace 対応（HashMap<String, VecDeque<TaskId>>）
+  - [x] blocking pop（timeout 付き）
+  - [x] spawn_blocking で async context での同期処理
+  - [x] Spurious wakeup 対策（ループでチェック）
+  - [x] timeout の残り時間計算（Instant::elapsed）
+- [x] テスト 4 個作成
+  - [x] push/pop ラウンドトリップ (test_push_pop_roundtrip)
+  - [x] timeout テスト (test_pop_timeout)
+  - [x] namespace 分離テスト (test_multiple_namespaces)
+  - [x] push が pop を起こすテスト (test_push_wakes_pop)
+- [x] Clippy クリーン
+  - [x] or_default() 使用
+  - [x] let チェーン構文使用
 
 **学習ポイント**:
 - Trait による抽象化（Redis と差し替え可能）
 - Mutex/Condvar による同期（blocking pop）
-- Async での blocking 処理の扱い
+- Async での blocking 処理の扱い（spawn_blocking）
+- Spurious wakeup 対策
+- Let チェーン構文（Rust 1.65+）
+- 並行テストのパターン（tokio::spawn）
 
-**参考**: 要件ドキュメント 15章「DeliveryQueue」、18.2節「Ports 最小契約」
+**参考**: 要件ドキュメント 15章「DeliveryQueue」、18.2節「Ports 最小契約」、学習ログ `learning_2026_01_11.md`
 
 ---
 

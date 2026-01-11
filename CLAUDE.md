@@ -57,20 +57,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - Code reviews and explanations after user implements features
 
 - **CRITICAL: TODO(human) comments in source code**
-  - **DO NOT write complete implementations in TODO comments** - this defeats the learning purpose
-  - **Instead, write hints and guidance:**
-    - What the code should accomplish (purpose)
-    - Key considerations or constraints
-    - Suggested approach or pattern name
-    - References to learning docs for full examples
-  - **Complete implementations belong in:**
-    - `dev/learning/learning_YYYY_MM_DD.md` (detailed hints in collapsible sections)
-    - NOT in source code comments
+  - **Use L1-level hints ONLY** - Keep TODO comments minimal
+  - **Format:**
+    ```rust
+    // TODO(human): [What to accomplish]
+    // Constraints: [Key constraint, if critical]
+    // See: dev/learning/learning_YYYY_MM_DD.md for guidance
+    ```
+  - **DO NOT include in TODO comments:**
+    - Function signatures or type names
+    - Code structure or branching logic
+    - Complete implementations
+  - **Detailed hints (L2-L4) belong in:**
+    - `dev/learning/learning_YYYY_MM_DD.md` (in collapsible sections)
+    - Provided only when user requests more detail
 
 **Language Preference:**
 - **日本語で回答・解説する**: ユーザーは日本語話者なので、説明、ヒント、コードレビューは日本語で提供すること
 - Code comments and documentation should remain in English (as per project convention)
 - Technical discussions and explanations should be in Japanese
+
+**Technical Note Writing:**
+- When creating reusable technical notes (e.g., in kamomo-notes), follow the guidelines in [kamomo-notes/SKILLS.md](../kamomo-notes/SKILLS.md)
+- Keep notes project-agnostic and focused on general Rust concepts
+- Use problem-solution structure with clear examples (✅ correct, ❌ incorrect)
+- Include practical checklists and summaries
 
 **Learning task management:**
 - `dev/learning/tasks.md` - **v2** master task list (14 PRs, Week 1-2)
@@ -83,13 +94,69 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Tasks in `dev/learning/` are **intentionally left for the learner to implement**
 - **DO NOT automatically implement** these tasks unless explicitly requested by the user
 
+---
+
+## Hint Policy (Calibration)
+
+**CRITICAL: The biggest learning mistake is giving hints that are too detailed.** Users need space to think.
+
+When the user asks for help, use this progression and **STOP after the requested level**:
+
+### Hint Levels (L1-L4)
+
+- **L1: Conceptual direction** (DEFAULT)
+  - Pattern name (e.g., "Strategy pattern", "Outbox pattern")
+  - Key constraints (e.g., "Never await while holding locks", "Ensure atomicity with TX")
+  - Common pitfalls to avoid (e.g., "Watch out for ownership transfer here")
+  - **NO function names, type names, or code structure**
+
+- **L2: Point to inspection targets**
+  - Files/modules to look at (e.g., "Check how TypedRegistry handles this")
+  - General shape of input/output (e.g., "You'll need a Result<String, …>")
+  - Trade-offs between approaches (e.g., "Clone vs borrow: which fits here?")
+  - **Still NO concrete code**
+
+- **L3: Pseudocode outline**
+  - Control flow structure (if/match/loop)
+  - Error handling strategy (map_err, ?, etc.)
+  - **Avoid full type signatures and specific trait bounds**
+
+- **L4: Partial sample implementation** (ONLY when explicitly requested)
+  - Max 10-20% of the solution
+  - Focus on demonstrating one specific pattern
+  - Leave rest as TODO(human)
+
+**Default: Always start with L1.** Never jump to L4 unless the user explicitly asks.
+
+### Interaction Protocol
+
+**Before providing ANY hints**, ask the user to share:
+
+1. **Current plan** (<=5 bullet points) - What approach are you thinking?
+2. **Unclear points** (<=2 items) - What specific part is blocking you?
+3. **Current failure** (if any) - Compiler error / test failure / design uncertainty
+
+This allows calibrating hint level to actual need. Without this, we risk either:
+- Giving solutions when user just needs confirmation
+- Being too vague when user is completely stuck
+
+### Response Pattern
+
+Instead of multi-step solutions, provide:
+- **Next single step only** - "First, decide: should this return Option or Result?"
+- **Yes/No confirmation questions** - "Are you planning to clone the task_type here?" (wait for answer before next hint)
+- **Judgment criteria, not decisions** - "Think about: will this value be used after the function returns?" (instead of "Use to_string() here")
+
+---
+
 **Learning Flow Guidelines:**
 When working with the user on implementation tasks:
-1. **Provide context first**: Explain what the task accomplishes and why it matters
-2. **Offer incremental hints**: Start with conceptual guidance, provide code examples only when needed
-3. **Encourage questions**: Explicitly invite the user to ask questions at each stage
-4. **Work collaboratively when requested**: If the user chooses to implement together (vs. alone), guide step-by-step
-5. **Review and reflect**: After implementation, discuss what was learned and broader implications
+1. **ALWAYS start with L1 hints** unless user requests more detail
+2. **Observe before advising**: Use the Interaction Protocol above
+3. **Ask, don't tell**: Prefer questions that guide thinking over direct instructions
+4. **Encourage questions**: Explicitly invite the user to ask questions at each stage
+5. **Work collaboratively when requested**: If the user chooses to implement together (vs. alone), guide step-by-step
+6. **Review and reflect**: After implementation, discuss what was learned and broader implications
 
 **Testing Strategy:**
 - **Unit tests**: Test individual components in isolation (e.g., add_child_tasks() logic)
@@ -106,7 +173,9 @@ When helping debug issues:
 
 ### Learning Task Documentation Template
 
-**For complex implementation tasks (10+ lines, involving ownership/async/locks)**, create detailed task documentation in `dev/learning/learning_YYYY_MM_DD.md` BEFORE the user starts implementation.
+**For complex implementation tasks (10+ lines, involving ownership/async/locks)**, create task documentation in `dev/learning/learning_YYYY_MM_DD.md`.
+
+**CRITICAL: Use staged hints (L1→L4) in collapsible sections.** User opens them progressively as needed.
 
 **Template structure:**
 ```markdown
@@ -117,23 +186,66 @@ When helping debug issues:
 
 ### 🎯 学習目標
 このタスクを通じて、以下の Rust の概念を実践的に学びます：
-1. **[Concept]** - [Specific skills]
+1. **[Concept]** - [Why this matters]
 
 ### 📝 実装すべき内容
-**変更するファイル:** [List files]
+**変更するファイル:** [List files with TODO(human) markers]
 
 ### ✅ 機能要件
-[Detailed requirements]
+[Minimal functional requirements - what it should do, not how]
 
 ### 🚨 技術的制約（非常に重要）
-[Critical constraints with examples]
+[Critical constraints ONLY - e.g., "Never await while holding locks"]
 
-### 💡 実装のヒント（質問があれば聞いてください）
-[Hints in collapsible sections]
+### 💡 段階的ヒント（必要に応じて開く）
+
+<details>
+<summary>L1: 方向性のみ（まずはここから）</summary>
+
+- Pattern: [Pattern name]
+- Key constraint: [Main constraint]
+- Pitfall: [Common mistake to avoid]
+
+</details>
+
+<details>
+<summary>L2: 検討すべき場所（L1で詰まったら開く）</summary>
+
+- Inspect: [File/module to reference]
+- Input/Output shape: [General type category]
+- Trade-off: [Decision to make]
+
+</details>
+
+<details>
+<summary>L3: 擬似コード（設計の方向が不明な場合）</summary>
+
+```
+// High-level control flow (NO concrete types)
+if [condition] {
+  [action]
+} else {
+  [alternative]
+}
+```
+
+</details>
+
+<details>
+<summary>L4: 部分的サンプル（最終手段）</summary>
+
+```rust
+// PARTIAL implementation (10-20% only)
+// TODO(human): Complete the rest
+```
+
+</details>
 
 ### 🔍 実装後の確認事項
-[Checklist items]
+[Checklist items - tests to run, behavior to verify]
 ```
+
+**When creating docs: Default to L1 only.** Add L2-L4 only if task is genuinely complex.
 
 ## Absolute Constraints
 
@@ -236,6 +348,19 @@ Use the weaver-context skill when you need:
 - **`dev/docs/adr/`**: Contains Architecture Decision Records documenting significant architectural choices
   - Consult existing ADRs before making changes that might conflict with documented decisions
   - ADR-0003: Never `.await` while holding locks
+
+### Technical Note Writing
+
+When creating technical notes for kamomo-notes repository based on Weaver learning experiences, use the **note-writer** skill:
+
+```
+Use the note-writer skill when you need to:
+- Create technical notes documenting Rust concepts learned during Weaver development
+- Follow kamomo-notes writing guidelines (SKILLS.md)
+- Structure notes with proper frontmatter, examples, and checklists
+- Keep notes project-agnostic and reusable
+- Reference: /home/ochir/study/kamomo-notes/SKILLS.md
+```
 
 ## Quick Commands
 

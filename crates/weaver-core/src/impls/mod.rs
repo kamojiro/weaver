@@ -18,5 +18,4 @@ pub mod dispatch;
 
 // 主要な型を再エクスポート
 pub use self::inmem_delivery::InMemoryDeliveryQueue;
-// TODO(human): DirectDispatch の実装後、以下のコメントを解除してください
-// pub use self::dispatch::DirectDispatch;
+pub use self::dispatch::DirectDispatch;
